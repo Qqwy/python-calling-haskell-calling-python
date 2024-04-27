@@ -2,6 +2,7 @@
 #define XSTR(a) #a
 
 #include <stdlib.h>
+#include <signal.h>
 #include <HsFFI.h>
 
 // We use the the widely-supported constructor/destructor gcc extension
@@ -15,7 +16,13 @@ static void library_init(void)
   static char *argv[] = { STR(MODULE) ".so", "+RTS", "-threaded", NULL };
   char **argv_ptr = argv;
 
+
+  // Start up Haskell
+  // Reset the Python signal handler 
+  // that is overwritten by the Haskell RTS startup:
+  void (*oldhandler)(int) = signal(SIGINT, SIG_DFL);
   hs_init(&argc, &argv_ptr);
+  signal(SIGINT, oldhandler);
 }
 
 static void library_exit (void) __attribute__ ((destructor));
