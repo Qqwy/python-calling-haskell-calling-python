@@ -21,5 +21,9 @@ def mappy(elems, fun):
   ArrType = _ctypes.c_int * (len(elems) + 1)
   arr = ArrType(*elems, 0)
 
+  # NOTE: Callback functions ought to be wrapped to turn exceptions into values
+  # While 'ctypes' ignores and logs exceptions, in that case 
+  # nothing is written to the return value memory so Haskell receives garbage.
+
   output = _dll.mappy(arr, _CallbackType(fun))
   return output[0:len(elems)]
