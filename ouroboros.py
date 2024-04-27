@@ -5,10 +5,19 @@ import atexit as _atexit
 _dll = _ctypes.CDLL("Ouroboros.so")
 
 # Register function signatures
-_dll.example.restype = _ctypes.c_char_p
 _dll.example.argtypes = [_ctypes.c_char_p]
-
+_dll.example.restype = _ctypes.c_char_p
 def example(string):
   input = string.encode()
   output = _dll.example(input)
   return output.decode()
+
+_CallbackType = _ctypes.CFUNCTYPE(_ctypes.c_int, _ctypes.c_int)
+_dll.mappy.argtypes = [_ctypes.POINTER(_ctypes.c_int), _CallbackType]
+_dll.mappy.restype = _ctypes.POINTER(_ctypes.c_int)
+def mappy(elems, fun):
+  ArrType = _ctypes.c_int * (len(elems) + 1)
+  arr = ArrType(*elems, 0)
+
+  output = _dll.mappy(arr, _CallbackType(fun))
+  return output[0:len(elems)]
