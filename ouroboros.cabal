@@ -35,13 +35,18 @@ extra-source-files: CHANGELOG.md
 
 foreign-library Ouroboros
   type:                native-shared
+
+  -- 'standalone' means: Compile in the (threaded!!) RTS
+  options: standalone
+
+  -- Only supported on Linux, not sure if we need this:
   -- lib-version-info:    6:3:2
 
   build-depends:       base ^>=4.19.0.0, async, vector
   hs-source-dirs:      src
   other-modules:       Ouroboros
   c-sources:           csrc/OuroborosWrapper.c
-  --ghc-options: -Wall -with-rtsopts="-threaded"
+  ghc-options: -Wall -threaded
   default-language:    Haskell2010
 
 -- executable ouroboros

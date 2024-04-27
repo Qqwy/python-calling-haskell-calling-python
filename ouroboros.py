@@ -16,6 +16,8 @@ _CallbackType = _ctypes.CFUNCTYPE(_ctypes.c_int, _ctypes.c_int)
 _dll.mappy.argtypes = [_ctypes.POINTER(_ctypes.c_int), _CallbackType]
 _dll.mappy.restype = _ctypes.POINTER(_ctypes.c_int)
 def mappy(elems, fun):
+  # NOTE: For now expect a 0-terminated array
+  # Passing in the size separately would be preferable
   ArrType = _ctypes.c_int * (len(elems) + 1)
   arr = ArrType(*elems, 0)
 
