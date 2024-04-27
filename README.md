@@ -10,3 +10,10 @@ Now, run the example:
 ```bash
 python example.py
 ```
+
+
+ - [x] Call Haskell from Python
+ - [x] Pass a Python callback function to a Haskell function, which Haskell will then call
+ - [x] Run Haskell in 'threaded' mode and have it do other things while running Python callbacks
+ - [x] Support the Python `multiprocessing` library ('just works'!)
+ - [ ] Require only a single Ctrl+C to quit (currently requires two).
