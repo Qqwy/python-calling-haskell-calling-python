@@ -4,21 +4,17 @@ import sys
 import signal
 # from multiprocessing import Pool
 
+def main():
+    thingy = 0
+    def myfun(val):
+        nonlocal thingy
 
-def myfun(val):
+        print(__name__, val)
+        time.sleep(1)
 
-    print(__name__, val)
-    time.sleep(0.1)
+        thingy = thingy + val
 
-
-    return val * val * val
-
-if __name__== '__main__':
-    # with Pool(5) as p:
-        # result = ouroboros.mappy([1,2,3,4,5,6,7,8,9,10], lambda val: p.apply(myfun, [val]))
-        # print(result)
-
-
+        return thingy
 
     print("Starting up!")
     time.sleep(2)
@@ -26,3 +22,9 @@ if __name__== '__main__':
     result = ouroboros.mappy([1,2,3,4,5,6,7,8,9,10], lambda val: myfun(val))
     print(result)
 
+
+if __name__== '__main__':
+    main()
+    # with Pool(5) as p:
+        # result = ouroboros.mappy([1,2,3,4,5,6,7,8,9,10], lambda val: p.apply(myfun, [val]))
+        # print(result)

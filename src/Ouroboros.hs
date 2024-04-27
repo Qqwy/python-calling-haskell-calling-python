@@ -49,10 +49,7 @@ mappy inPtr funPtr = handle printOnInterrupt $ do
               print outputParam
               -- let res = fun val outputParam
               output <- fun val outputParam `seq` peek outputParam
-              print output
-              pure $ fst output
-              -- errno <- res `seq` getErrno
-              -- if errno == eINTR then throw UserInterrupt else pure res
+              if (fst output) /= 1 then throw UserInterrupt else pure (snd output)
     list' <- mapM fun' list
     print list'
 
