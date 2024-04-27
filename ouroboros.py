@@ -12,8 +12,8 @@ def example(string):
   output = _dll.example(input)
   return output.decode()
 
-_CallbackType = _ctypes.CFUNCTYPE(_ctypes.c_int, _ctypes.c_int)
-_dll.mappy.argtypes = [_ctypes.POINTER(_ctypes.c_int), _CallbackType]
+_IntToIntFunction = _ctypes.CFUNCTYPE(_ctypes.c_int, _ctypes.c_int)
+_dll.mappy.argtypes = [_ctypes.POINTER(_ctypes.c_int), _IntToIntFunction]
 _dll.mappy.restype = _ctypes.POINTER(_ctypes.c_int)
 def mappy(elems, fun):
   # NOTE: For now expect a 0-terminated array
@@ -25,5 +25,5 @@ def mappy(elems, fun):
   # While 'ctypes' ignores and logs exceptions, in that case 
   # nothing is written to the return value memory so Haskell receives garbage.
 
-  output = _dll.mappy(arr, _CallbackType(fun))
+  output = _dll.mappy(arr, _IntToIntFunction(fun))
   return output[0:len(elems)]
