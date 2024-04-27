@@ -28,7 +28,7 @@ class IntPair(_ctypes.Structure):
     _fields_ = [("x", _ctypes.c_int),
                 ("y", _ctypes.c_int)]
 
-_IntToIntFunction = _ctypes.CFUNCTYPE(_ctypes.c_int, _ctypes.c_int, use_errno=True)
+_IntToIntFunction = _ctypes.CFUNCTYPE(None, _ctypes.c_int, _ctypes.POINTER(IntPair), use_errno=True)
 _dll.mappy.argtypes = [_ctypes.POINTER(_ctypes.c_int), _IntToIntFunction]
 _dll.mappy.restype = _ctypes.POINTER(_ctypes.c_int)
 def mappy(elems, fun):
@@ -42,15 +42,28 @@ def mappy(elems, fun):
     # NOTE: Callback functions ought to be wrapped to turn exceptions into values
     # While 'ctypes' ignores and logs exceptions, in that case 
     # nothing is written to the return value memory so Haskell receives garbage.
-    def fun_wrapper(val):
+    def fun_wrapper(val, outParam):
       try:
-        return fun(val)
-        # return IntPair(0, fun(val))
+        print("outParam", outParam, outParam.contents.x, outParam.contents.y)
+        # return fun(val)
+        res = fun(val)
+        print("res", res)
+        outParam.contents.x = res
+        outParam.contents.y = 42
+        print("outParam after", outParam, outParam.contents.x, outParam.contents.y)
+        # return fun(val)
+        # ptr = _ctypes.pointer(IntPair(0, res))
+        # return _ctypes.cast(ptr, _ctypes.c_void_p)
       except KeyboardInterrupt as e:
         print("KeyboardInterrupt received on the inside!")
-        _ctypes.set_errno(_errno.EINTR)
-        # return IntPair(1, 0)
-        return 0
+        # _ctypes.set_errno(_errno.EINTR)
+        # return 0
+        # ptr = _ctypes.pointer(IntPair(1, 0))
+        # outParam.contents # = IntPair(69, 1)
+        outParam.contents.x = 69
+        outParam.contents.y = 1
+
+        # return _ctypes.cast(ptr, _ctypes.c_void_p)
 
     output = _dll.mappy(arr, _IntToIntFunction(fun_wrapper))
     if _ctypes.get_errno() == _errno.EINTR:
