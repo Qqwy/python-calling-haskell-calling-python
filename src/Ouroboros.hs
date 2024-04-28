@@ -31,10 +31,15 @@ example cstr = do
   wait promise
   newCString appended
 
+-- | Model a sum type as an (error, value) product type, as it is easier to use it from Python that way.
+-- If the bool is true, it contains an error and the second element might be garbage.
+-- If the bool is false, `value` can be read.
+type ResultTuple a = (Bool, a)
+type IntToIntCallback = (CInt -> Ptr (ResultTuple CInt) -> IO ())
 
-foreign import ccall "dynamic" ptrToFun :: FunPtr (CInt -> Ptr (CInt, CInt) -> ()) -> (CInt -> Ptr (CInt, CInt) -> ())
-foreign export ccall mappy :: Ptr CInt -> FunPtr (CInt -> Ptr (CInt, CInt) -> ()) -> IO (Ptr CInt)
-mappy :: Ptr CInt -> FunPtr (CInt -> Ptr (CInt, CInt) -> ()) -> IO (Ptr CInt)
+foreign import ccall "dynamic" ptrToFun :: FunPtr IntToIntCallback -> IntToIntCallback
+foreign export ccall mappy :: Ptr CInt -> FunPtr IntToIntCallback -> IO (Ptr CInt)
+mappy :: Ptr CInt -> FunPtr IntToIntCallback -> IO (Ptr CInt)
 mappy inPtr funPtr = handle printOnInterrupt $ do
   tid <- myThreadId
   -- installHandler keyboardSignal (Catch (throwTo tid UserInterrupt)) Nothing
@@ -43,16 +48,15 @@ mappy inPtr funPtr = handle printOnInterrupt $ do
     list <- peekArray0 0 inPtr
     -- print list
 
-    let fun = ptrToFun funPtr 
-    let fun' val = do
-              outputParam <- malloc
+    let fun = ptrToFun funPtr
+    let fun' val = alloca $ \outputParam -> do
               print outputParam
-              -- let res = fun val outputParam
-              output <- fun val outputParam `seq` peek outputParam
-              print output
-              pure $ fst output
-              -- errno <- res `seq` getErrno
-              -- if errno == eINTR then throw UserInterrupt else pure res
+              void $ fun val outputParam
+              (err, result) <- peek outputParam
+              if err then 
+                throw UserInterrupt 
+              else 
+                pure result
     list' <- mapM fun' list
     print list'
 
@@ -69,7 +73,7 @@ nag = do
   nag
 
 printOnInterrupt exception | exception == UserInterrupt = do
-  print exception 
+  print "User interrupt was received!"
   throw exception
 printOnInterrupt exception = do
   throw exception

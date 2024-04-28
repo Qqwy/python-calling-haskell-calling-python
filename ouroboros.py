@@ -24,11 +24,11 @@ def example(string):
   output = _dll.example(input)
   return output.decode()
 
-class IntPair(_ctypes.Structure):
-    _fields_ = [("x", _ctypes.c_int),
-                ("y", _ctypes.c_int)]
+class IntResultTuple(_ctypes.Structure):
+    _fields_ = [("error", _ctypes.c_int),
+                ("result", _ctypes.c_int)]
 
-_IntToIntFunction = _ctypes.CFUNCTYPE(None, _ctypes.c_int, _ctypes.POINTER(IntPair), use_errno=True)
+_IntToIntFunction = _ctypes.CFUNCTYPE(None, _ctypes.c_int, _ctypes.POINTER(IntResultTuple), use_errno=True)
 _dll.mappy.argtypes = [_ctypes.POINTER(_ctypes.c_int), _IntToIntFunction]
 _dll.mappy.restype = _ctypes.POINTER(_ctypes.c_int)
 def mappy(elems, fun):
@@ -44,26 +44,13 @@ def mappy(elems, fun):
     # nothing is written to the return value memory so Haskell receives garbage.
     def fun_wrapper(val, outParam):
       try:
-        print("outParam", outParam, outParam.contents.x, outParam.contents.y)
-        # return fun(val)
         res = fun(val)
-        print("res", res)
-        outParam.contents.x = res
-        outParam.contents.y = 42
-        print("outParam after", outParam, outParam.contents.x, outParam.contents.y)
-        # return fun(val)
-        # ptr = _ctypes.pointer(IntPair(0, res))
-        # return _ctypes.cast(ptr, _ctypes.c_void_p)
+        outParam.contents.result = res
+        outParam.contents.error = False
       except KeyboardInterrupt as e:
         print("KeyboardInterrupt received on the inside!")
-        # _ctypes.set_errno(_errno.EINTR)
-        # return 0
-        # ptr = _ctypes.pointer(IntPair(1, 0))
-        # outParam.contents # = IntPair(69, 1)
-        outParam.contents.x = 69
-        outParam.contents.y = 1
-
-        # return _ctypes.cast(ptr, _ctypes.c_void_p)
+        outParam.contents.error = True
+        # outparam.contents.result remains unset
 
     output = _dll.mappy(arr, _IntToIntFunction(fun_wrapper))
     if _ctypes.get_errno() == _errno.EINTR:
