@@ -31,6 +31,8 @@ example cstr = do
   wait promise
   newCString appended
 
+type SizePrefixedArray elem = (Word, Ptr elem)
+
 -- | Model a sum type as an (error, value) product type, as it is easier to use it from Python that way.
 -- If the bool is true, it contains an error and the second element might be garbage.
 -- If the bool is false, `value` can be read.
@@ -38,14 +40,18 @@ type ResultTuple a = (Bool, a)
 type IntToIntCallback = (CInt -> Ptr (ResultTuple CInt) -> IO ())
 
 foreign import ccall "dynamic" ptrToFun :: FunPtr IntToIntCallback -> IntToIntCallback
-foreign export ccall mappy :: Ptr CInt -> FunPtr IntToIntCallback -> IO (Ptr CInt)
-mappy :: Ptr CInt -> FunPtr IntToIntCallback -> IO (Ptr CInt)
+foreign export ccall mappy :: Ptr (SizePrefixedArray CInt) -> FunPtr IntToIntCallback -> IO (Ptr (SizePrefixedArray CInt))
+mappy :: Ptr (SizePrefixedArray CInt) -> FunPtr IntToIntCallback -> IO (Ptr (SizePrefixedArray CInt))
 mappy inPtr funPtr = handle printOnInterrupt $ do
   tid <- myThreadId
   -- installHandler keyboardSignal (Catch (throwTo tid UserInterrupt)) Nothing
 
   withAsync nag $ \nagger -> do
-    list <- peekArray0 0 inPtr
+    print inPtr
+    (len, inElemsPtr) <- peek inPtr
+    print len
+    -- print inElemsPtr
+    list <- peekArray (fromIntegral len) inElemsPtr
     -- print list
 
     let fun = ptrToFun funPtr
@@ -60,8 +66,10 @@ mappy inPtr funPtr = handle printOnInterrupt $ do
     list' <- mapM fun' list
     print list'
 
-    outPtr <- mallocArray (length list')
-    pokeArray0 0 outPtr list'
+    outPtr <- malloc
+    elemsPtr <- mallocArray (length list')
+    pokeArray elemsPtr list'
+    poke outPtr (fromIntegral $ length list', elemsPtr)
 
     cancel nagger
     pure outPtr
