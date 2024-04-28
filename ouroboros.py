@@ -1,6 +1,7 @@
 # import ctypes as _ctypes
 # import atexit as _atexit
 
+import weakref
 # # Load the dynamic library
 # _dll = _ctypes.CDLL("Ouroboros.so")
 
@@ -31,9 +32,14 @@
 from cffi import FFI
 _ffi = FFI()
 _ffi.cdef("""
-   char* example(char* str);
+  char* example(char* str);
 
-   int* mappy(int*, int (*)(int));
+  typedef struct {
+      int x;
+      int y;
+  } intpair;
+
+  int* mappy(int*, intpair *(*)(int));
 """)
 _dll = _ffi.dlopen("Ouroboros.so")
 
@@ -42,8 +48,18 @@ def example(string):
   output = _dll.example(input)
   return _ffi.string(output).decode()
 
+_weakkeydict = weakref.WeakKeyDictionary()
+
+
 def mappy(elems, fun):
+  def fun_inner(val):
+    res = fun(val)
+    print(res)
+    output = _ffi.new("intpair*", res)
+    _weakkeydict[fun] = output
+    print(output)
+    return output
   array = _ffi.new("int[]", elems + [0])
-  funptr = _ffi.callback("int(int)", fun)
+  funptr = _ffi.callback("intpair*(int)", fun_inner)
   output = _dll.mappy(array, funptr)
   return list(output[0:len(elems)])

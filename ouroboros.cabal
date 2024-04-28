@@ -42,7 +42,7 @@ foreign-library Ouroboros
   -- Only supported on Linux, not sure if we need this:
   -- lib-version-info:    6:3:2
 
-  build-depends:       base ^>=4.19.0.0, async, vector
+  build-depends:       base ^>=4.19.0.0, async, vector, storable-tuple
   hs-source-dirs:      src
   other-modules:       Ouroboros
   c-sources:           csrc/OuroborosWrapper.c

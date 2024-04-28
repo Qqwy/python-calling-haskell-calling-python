@@ -6,6 +6,7 @@ import Foreign.C.String
 import Foreign.Ptr
 import Foreign.Marshal
 import Foreign.Storable
+import Foreign.Storable.Tuple
 
 import Control.Monad (forever)
 import Control.Concurrent (threadDelay, yield)
@@ -24,15 +25,20 @@ example cstr = do
   newCString appended
 
 
-foreign import ccall "dynamic" ptrToFun :: FunPtr (CInt -> CInt) -> (CInt -> CInt)
-foreign export ccall mappy :: Ptr CInt -> FunPtr (CInt -> CInt) -> IO (Ptr CInt)
-mappy :: Ptr CInt -> FunPtr (CInt -> CInt) -> IO (Ptr CInt)
+foreign import ccall "dynamic" ptrToFun :: FunPtr (CInt -> Ptr (CInt, CInt)) -> (CInt -> Ptr (CInt, CInt))
+foreign export ccall mappy :: Ptr CInt -> FunPtr (CInt -> Ptr (CInt, CInt)) -> IO (Ptr CInt)
+mappy :: Ptr CInt -> FunPtr (CInt -> Ptr (CInt, CInt)) -> IO (Ptr CInt)
 mappy inPtr funPtr = withAsync nag $ \nagger -> do
   list <- peekArray0 0 inPtr
   -- print list
 
   let fun = ptrToFun funPtr
-  let list' = fmap fun list
+  let fun' arg = do
+            let res = fun arg
+            output <- peek res
+            print output
+            pure $ snd output
+  list' <- mapM fun' list
   print list'
 
   outPtr <- mallocArray (length list')
