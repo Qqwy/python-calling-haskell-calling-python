@@ -15,6 +15,49 @@ def example(string):
   output = _dll.example(input)
   return output.decode()
 
+_dll.haskellRealloc.argtypes = [_ctypes.c_void_p, _ctypes.c_uint]
+_dll.haskellRealloc.restype = _ctypes.c_void_p
+def haskellRealloc(ptr, size):
+  return _ctypes.cast(_dll.haskellRealloc(ptr, size), _ctypes.c_void_p)
+
+def haskellMalloc(size):
+  return haskellRealloc(None, size)
+
+def haskellFree(ptr):
+  haskellRealloc(ptr, 0)
+  return None
+
+def haskellBytestring(bytestring):
+  ptr = _ctypes.cast(haskellMalloc(len(bytestring)), _ctypes.POINTER(_ctypes.c_char))
+  _ctypes.memmove(ptr, bytestring, len(bytestring))
+  return ptr
+
+def CleverVec(elemType, *elemVals):
+  VLA = elemType * len(elemVals)
+
+  def __init__(self, *elemVals):
+    self.size = len(elemVals)
+    self.elems = VLA(*elemVals)
+  
+  def __len__(self):
+    return self.size
+
+  def __getitem__(self, key):
+    return self.elems.__getitem__(key)
+  klass = type(
+    f"CleverVec[{elemType.__name__}]", 
+    (_ctypes.Structure,),
+    dict(
+      _fields_= [('size', _ctypes.c_uint64), ('elems', VLA)],
+      __init__ = __init__,
+      __len__ = __len__,
+      __getitem__ = __getitem__
+    )
+  )
+
+  return klass(*elemVals)
+
+
 # An array with a known size, stored as (size, elem*)-pair in memory.
 def SizePrefixedArray(elemType):
   def __init__(self, *vals):

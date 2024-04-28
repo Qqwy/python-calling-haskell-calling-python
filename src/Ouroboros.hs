@@ -1,4 +1,5 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE GHC2021 #-}
 module Ouroboros where
 import qualified Data.Char as C
 import Foreign.C.Types
@@ -30,6 +31,38 @@ example cstr = do
     putStrLn $ "The result is: " <> appended
   wait promise
   newCString appended
+
+newtype CleverVector a = CleverVector [a]
+instance Storable a => Storable (CleverVector a) where
+  sizeOf _ = (sizeOf @Word undefined) -- NOTE: Actual size depends on the value :-(
+  alignment _ = max (alignment @Word undefined) (alignment @a undefined)
+  peek ptr = do 
+    size <- peek (sizePtr ptr)
+    elems <- peekArray (fromIntegral size) (elemPtr ptr) 
+    pure (CleverVector elems)
+
+  poke ptr (CleverVector elems) = do
+    let size = (fromIntegral (length elems))
+    poke (sizePtr ptr) size
+    pokeArray (elemPtr ptr) elems
+
+sizePtr :: Ptr (CleverVector a) -> Ptr Word
+sizePtr = castPtr
+
+elemPtr :: Ptr (CleverVector a) -> Ptr a
+elemPtr ptr = castPtr (ptr `plusPtr` wordsize)
+  where
+    wordsize = sizeOf @Word undefined
+
+-- | Export `reallocBytes` so the foreign (in this case Python) code
+-- can allocate, reallocate and free memory
+-- which can also be cleaned up by using 
+-- the Foreign.Marshal.Alloc functions from within Haskell
+foreign export ccall haskellRealloc :: Ptr a -> Word -> IO (Ptr a)
+haskellRealloc ptr size = reallocBytes ptr (fromIntegral size)
+
+
+
 
 type SizePrefixedArray elem = (Word, Ptr elem)
 

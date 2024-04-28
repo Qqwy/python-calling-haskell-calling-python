@@ -21,17 +21,17 @@ maintainer:         qqwy@gmx.com
 -- category:
 extra-source-files: CHANGELOG.md
 
--- library
---     exposed-modules:  MyLib, Ouroboros
+library
+    exposed-modules:  CleverVector
 
---     -- Modules included in this library but not exported.
---     -- other-modules:
+    -- Modules included in this library but not exported.
+    -- other-modules:
 
---     -- LANGUAGE extensions used by modules in this package.
---     -- other-extensions:
---     build-depends:    base ^>=4.19.0.0, async
---     hs-source-dirs:   src
---     default-language: Haskell2010
+    -- LANGUAGE extensions used by modules in this package.
+    -- other-extensions:
+    build-depends:    base ^>=4.19.0.0, async, vector, unix
+    hs-source-dirs:   src
+    default-language: Haskell2010
 
 foreign-library Ouroboros
   type:                native-shared
