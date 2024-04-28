@@ -20,7 +20,8 @@ import Control.Exception as E
 import Control.Concurrent
 import System.Posix.Signals
 import Foreign.Storable.Tuple
-
+import SizePrefixedArray (SizePrefixedArray)
+import SizePrefixedArray qualified
 
 foreign export ccall example :: CString -> IO CString
 example :: CString -> IO CString 
@@ -32,28 +33,6 @@ example cstr = do
   wait promise
   newCString appended
 
-newtype CleverVector a = CleverVector [a]
-instance Storable a => Storable (CleverVector a) where
-  sizeOf _ = (sizeOf @Word undefined) -- NOTE: Actual size depends on the value :-(
-  alignment _ = max (alignment @Word undefined) (alignment @a undefined)
-  peek ptr = do 
-    size <- peek (sizePtr ptr)
-    elems <- peekArray (fromIntegral size) (elemPtr ptr) 
-    pure (CleverVector elems)
-
-  poke ptr (CleverVector elems) = do
-    let size = (fromIntegral (length elems))
-    poke (sizePtr ptr) size
-    pokeArray (elemPtr ptr) elems
-
-sizePtr :: Ptr (CleverVector a) -> Ptr Word
-sizePtr = castPtr
-
-elemPtr :: Ptr (CleverVector a) -> Ptr a
-elemPtr ptr = castPtr (ptr `plusPtr` wordsize)
-  where
-    wordsize = sizeOf @Word undefined
-
 -- | Export `reallocBytes` so the foreign (in this case Python) code
 -- can allocate, reallocate and free memory
 -- which can also be cleaned up by using 
@@ -64,7 +43,7 @@ haskellRealloc ptr size = reallocBytes ptr (fromIntegral size)
 
 
 
-type SizePrefixedArray elem = (Word, Ptr elem)
+-- type SizePrefixedArray elem = (Word, Ptr elem)
 
 -- | Model a sum type as an (error, value) product type, as it is easier to use it from Python that way.
 -- If the bool is true, it contains an error and the second element might be garbage.
@@ -80,12 +59,13 @@ mappy inPtr funPtr = handle printOnInterrupt $ do
   -- installHandler keyboardSignal (Catch (throwTo tid UserInterrupt)) Nothing
 
   withAsync nag $ \nagger -> do
-    print inPtr
-    (len, inElemsPtr) <- peek inPtr
-    print len
-    -- print inElemsPtr
-    list <- peekArray (fromIntegral len) inElemsPtr
-    -- print list
+    list <- SizePrefixedArray.fromRawPointerNofree @[CInt] inPtr
+    -- print inPtr
+    -- (len, inElemsPtr) <- peek inPtr
+    -- print len
+    -- -- print inElemsPtr
+    -- list <- peekArray (fromIntegral len) inElemsPtr
+    -- -- print list
 
     let fun = ptrToFun funPtr
     let fun' val = alloca $ \outputParam -> do
@@ -99,10 +79,11 @@ mappy inPtr funPtr = handle printOnInterrupt $ do
     list' <- mapM fun' list
     print list'
 
-    outPtr <- malloc
-    elemsPtr <- mallocArray (length list')
-    pokeArray elemsPtr list'
-    poke outPtr (fromIntegral $ length list', elemsPtr)
+    -- outPtr <- malloc
+    -- elemsPtr <- mallocArray (length list')
+    -- pokeArray elemsPtr list'
+    -- poke outPtr (fromIntegral $ length list', elemsPtr)
+    outPtr <- SizePrefixedArray.toRawPointer list'
 
     cancel nagger
     pure outPtr
