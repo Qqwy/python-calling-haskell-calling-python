@@ -1,7 +1,7 @@
 {-# LANGUAGE GHC2021 #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
-module FatPtr (FatPtr, Storable(..), clear) where
+module FatPtr where
 
 import Foreign.Storable
 import Foreign.Ptr
@@ -10,6 +10,8 @@ import Foreign.Marshal
 import Foreign.C.Types
 import GHC.IsList (IsList, Item)
 import GHC.IsList qualified as IsList
+import System.IO.Unsafe (unsafePerformIO)
+
 
 -- | Intended to only be used behind a `Ptr` or `ForeignPtr`.
 --
@@ -29,73 +31,102 @@ import GHC.IsList qualified as IsList
 --
 -- The internal `elems` pointer is allocated using `Foreign.Marshal.Alloc.malloc`
 --
-newtype FatPtr elem = FatPtr elem
+data FatPtr a = FatPtr (ForeignPtr a) CSize
 
-instance (IsList list, Storable item, (Item list) ~ item) => Storable (FatPtr item) where
-  sizeOf _ = (sizeOf' @(Ptr (Item list))) + sizeOf' @CSize
-  alignment _ = max (alignment' @(Ptr (Item list))) (alignment' @CSize)
-  peek ptr = do
-    size <- peek (sizePtr ptr)
-    elems <- peekArray size (elemsPtr ptr)
-    pure (IsList.fromListN size elems)
+data RawFatPtr a = RawFatPtr (Ptr a) CSize
 
-  -- | Make sure to call `initialize` on the `FatPtr` before `poke`ing it!
-  -- 
-  -- As it internally uses `Foreign.Marshal.Alloc.reallocBytes`, it is important that the internal element pointer
-  -- is a valid pointer (either a `nullPtr` or a pointer to valid allocated memory) before the call to `poke`.
-  -- This can be ensured by either using `calloc` or by calling `initialize`.
-  poke ptr elems = do
-    let size = length elems
-    poke (sizePtr ptr) size
-    newElemsPtr <- reallocBytes (elemsPtr ptr) (size * sizeOf' (Item listlike))
-    pokeArray (newElemsPtr ptr) (IsList.toList elems)
+new :: (FatPtr a)
+new = unsafePerformIO $ unsafeFromRaw newRaw
 
-fromList :: (IsList list) => list -> IO (ForeignPtr (FatPtr (Item list)))
-fromList list = do
-  ptr <- allocForeignPtr
-  withForeignPtr $ \rawPtr -> do
-    initialize rawPtr
-    poke ptr list
-    addForeignPtrConcFinalizer ptr (finalize rawPtr)
-  pure ptr
+newRaw :: (RawFatPtr a)
+newRaw = RawFatPtr nullPtr 0
 
-toList :: (IsList list) => ForeignPtr (FatPtr (Item list)) -> IO list
-toList ptr = withForeignPtr ptr peek
+-- | 
+-- Make sure the original pointer is not manually freed after this call!
+unsafeFromRaw :: RawFatPtr a -> IO (FatPtr a)
+unsafeFromRaw (RawFatPtr elems size) = do
+  elemsPtr <- newForeignPtr finalizerFree elems
+  pure (FatPtr elemsPtr size)
+
+withRaw :: FatPtr a -> (RawFatPtr a -> IO b) -> IO b
+withRaw (FatPtr elems size) action = do
+  withForeignPtr elems $ \rawElemsPtr ->
+    action (RawFatPtr rawElemsPtr size)
+
+copyToRaw :: forall a. (Storable a) => FatPtr a -> IO (RawFatPtr a)
+copyToRaw ptr =
+  withRaw ptr $ \(RawFatPtr elemsSrc size) -> do
+    elemsDst <- mallocArray (fromIntegral size)
+    copyBytes elemsDst elemsSrc (sizeOf' @a * (fromIntegral size))
+    pure (RawFatPtr elemsDst size)
+
+-- fromListRaw :: (IsList list) => list -> RawFatPtr (Item list)
+
+-- instance (IsList list, Storable item, (Item list) ~ item) => Storable (FatPtr item) where
+--   sizeOf _ = (sizeOf' @(Ptr (Item list))) + sizeOf' @CSize
+--   alignment _ = max (alignment' @(Ptr (Item list))) (alignment' @CSize)
+--   peek ptr = do
+--     size <- peek (sizePtr ptr)
+--     elems <- peekArray size (elemsPtr ptr)
+--     pure (IsList.fromListN size elems)
+
+--   -- | Make sure to call `initialize` on the `FatPtr` before `poke`ing it!
+--   -- 
+--   -- As it internally uses `Foreign.Marshal.Alloc.reallocBytes`, it is important that the internal element pointer
+--   -- is a valid pointer (either a `nullPtr` or a pointer to valid allocated memory) before the call to `poke`.
+--   -- This can be ensured by either using `calloc` or by calling `initialize`.
+--   poke ptr elems = do
+--     let size = length elems
+--     poke (sizePtr ptr) size
+--     newElemsPtr <- reallocBytes (elemsPtr ptr) (size * sizeOf' (Item listlike))
+--     pokeArray (newElemsPtr ptr) (IsList.toList elems)
+
+-- fromList :: (IsList list) => list -> IO (ForeignPtr (FatPtr (Item list)))
+-- fromList list = do
+--   ptr <- allocForeignPtr
+--   withForeignPtr $ \rawPtr -> do
+--     initialize rawPtr
+--     poke ptr list
+--     addForeignPtrConcFinalizer ptr (finalize rawPtr)
+--   pure ptr
+
+-- toList :: (IsList list) => ForeignPtr (FatPtr (Item list)) -> IO list
+-- toList ptr = withForeignPtr ptr peek
   
 
 -- | Given garbage memory (such as returned by `malloc` or `alloca`),
 -- initialize a valid empty `FatPtr` in this memory.
 --
 -- If `calloc` was used for initialization, the `FatPtr` is already initialized correctly.
-initialize :: Ptr (FatPtr elem) -> IO (Ptr (FatPtr elem))
-initialize ptr = do
-  poke (sizePtr ptr) 0
-  poke (elemsPtr ptr) nullPtr
+-- initialize :: Ptr (FatPtr elem) -> IO (Ptr (FatPtr elem))
+-- initialize ptr = do
+--   poke (sizePtr ptr) 0
+--   poke (elemsPtr ptr) nullPtr
 
 -- | Cleans up the internal buffer of the `FatPtr`, leaving it in an invalid 'garbage' state.
 --
 -- Make sure that the `FatPtr` is not used afterwards (unless `initialize` is called again)
-finalize ptr = do
-  free (elemsPtr ptr)
+-- finalize ptr = do
+--   free (elemsPtr ptr)
 
--- | Empties a FatPtr, `free`ing the internal buffer and setting its size to `0`.
---
--- After this function the `FatPtr` is in a valid and known state:
--- - size is `0`
--- - the buffer pointer is a `nullPtr`
-clear :: Ptr (FatPtr elem) -> IO (Ptr (FatPtr elem))
-clear ptr = do
-  finalize ptr
-  initialize ptr
+-- -- | Empties a FatPtr, `free`ing the internal buffer and setting its size to `0`.
+-- --
+-- -- After this function the `FatPtr` is in a valid and known state:
+-- -- - size is `0`
+-- -- - the buffer pointer is a `nullPtr`
+-- clear :: Ptr (FatPtr elem) -> IO (Ptr (FatPtr elem))
+-- clear ptr = do
+--   finalize ptr
+--   initialize ptr
 
 sizeOf' :: forall a. Storable a => Int
 sizeOf' = sizeOf (undefined :: a)
 
-alignment' :: forall a. Storable a => Int
-alignment' = alignment (undefined :: a)
+-- alignment' :: forall a. Storable a => Int
+-- alignment' = alignment (undefined :: a)
 
-sizePtr :: forall a. Ptr (FatPtr a) -> Ptr CSize
-sizePtr = castPtr (ptr `plusPtr` sizeOf' @(Ptr a))
+-- sizePtr :: forall a. Ptr (FatPtr a) -> Ptr CSize
+-- sizePtr = castPtr (ptr `plusPtr` sizeOf' @(Ptr a))
 
-elemsPtr :: Ptr (FatPtr a) -> Ptr a
-elemsPtr ptr = castPtr (ptr `plusPtr` wordsize)
+-- elemsPtr :: Ptr (FatPtr a) -> Ptr a
+-- elemsPtr ptr = castPtr (ptr `plusPtr` wordsize)
