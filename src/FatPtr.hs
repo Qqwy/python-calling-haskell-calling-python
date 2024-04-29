@@ -1,6 +1,7 @@
 {-# LANGUAGE GHC2021 #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE TypeFamilies #-}
 module FatPtr where
 
 import Foreign.Storable
@@ -32,8 +33,10 @@ import System.IO.Unsafe (unsafePerformIO)
 -- The internal `elems` pointer is allocated using `Foreign.Marshal.Alloc.malloc`
 --
 data FatPtr a = FatPtr (ForeignPtr a) CSize
+  deriving (Show)
 
 data RawFatPtr a = RawFatPtr (Ptr a) CSize
+  deriving (Show)
 
 new :: (FatPtr a)
 new = unsafePerformIO $ unsafeFromRaw newRaw
@@ -42,7 +45,7 @@ newRaw :: (RawFatPtr a)
 newRaw = RawFatPtr nullPtr 0
 
 -- | 
--- Make sure the original pointer is not manually freed after this call!
+-- Make sure the original pointer is not manually freed (or kept around in general) after this call!
 unsafeFromRaw :: RawFatPtr a -> IO (FatPtr a)
 unsafeFromRaw (RawFatPtr elems size) = do
   elemsPtr <- newForeignPtr finalizerFree elems
@@ -60,7 +63,64 @@ copyToRaw ptr =
     copyBytes elemsDst elemsSrc (sizeOf' @a * (fromIntegral size))
     pure (RawFatPtr elemsDst size)
 
--- fromListRaw :: (IsList list) => list -> RawFatPtr (Item list)
+fromList :: (IsList list, Storable (Item list)) => list -> FatPtr (Item list)
+fromList list = unsafePerformIO $ do
+  rawPtr <- rawFromList list
+  unsafeFromRaw rawPtr
+
+rawFromList :: (IsList list, Storable (Item list)) => list -> IO (RawFatPtr (Item list))
+rawFromList list = do
+  let elems = (IsList.toList list)
+  let size = length elems
+  elemsPtr <- mallocArray size
+  pokeArray elemsPtr elems
+  pure (RawFatPtr elemsPtr (fromIntegral size))
+
+rawToListNonfree :: (IsList list, Storable (Item list)) => RawFatPtr (Item list) -> IO list
+rawToListNonfree (RawFatPtr ptr size) = do
+  let size' = fromIntegral size
+  list <- peekArray size' ptr
+  pure (IsList.fromListN size' list)
+
+-- | Caller must make sure the original pointer is no longer used after passed to this function.
+unsafeRawFree :: RawFatPtr a -> IO ()
+unsafeRawFree (RawFatPtr ptr size) = do
+  free ptr
+
+-- | Caller must make sure the original pointer is no longer used after passed to this function.
+unsafeRawToList :: (IsList list, Storable (Item list)) => RawFatPtr (Item list) -> IO list
+unsafeRawToList ptr = do
+  list <- rawToListNonfree ptr
+  unsafeRawFree ptr
+  pure list
+
+toList :: (IsList list, Storable (Item list)) => FatPtr (Item list) -> list
+toList ptr = unsafePerformIO $
+  withRaw ptr $ \rawPtr -> do
+    rawToListNonfree rawPtr
+
+instance (Storable a) => IsList (FatPtr a) where
+  type Item (FatPtr a) = a
+  fromList = fromList
+  toList = toList
+
+instance Storable (RawFatPtr a) where
+  sizeOf _ = (sizeOf' @(Ptr a)) + sizeOf' @CSize
+  alignment _ = max (alignment' @(Ptr a)) (alignment' @CSize)
+  peek ptr = do
+    elems <- peek (castPtr ptr)
+    size <- peek (sizePtr ptr)
+    pure (RawFatPtr elems size)
+  poke ptr (RawFatPtr elems size) = do
+    poke (castPtr ptr) elems
+    poke (sizePtr ptr) size
+
+instance Storable (FatPtr a) where
+  sizeOf _ = (sizeOf' @(Ptr a)) + sizeOf' @CSize
+  alignment _ = max (alignment' @(Ptr a)) (alignment' @CSize)
+  peek ptr = peek (castPtr ptr) >>= unsafeFromRaw
+  poke ptr fatPtr = withRaw fatPtr (poke (castPtr ptr))
+
 
 -- instance (IsList list, Storable item, (Item list) ~ item) => Storable (FatPtr item) where
 --   sizeOf _ = (sizeOf' @(Ptr (Item list))) + sizeOf' @CSize
@@ -122,11 +182,11 @@ copyToRaw ptr =
 sizeOf' :: forall a. Storable a => Int
 sizeOf' = sizeOf (undefined :: a)
 
--- alignment' :: forall a. Storable a => Int
--- alignment' = alignment (undefined :: a)
+alignment' :: forall a. Storable a => Int
+alignment' = alignment (undefined :: a)
 
--- sizePtr :: forall a. Ptr (FatPtr a) -> Ptr CSize
--- sizePtr = castPtr (ptr `plusPtr` sizeOf' @(Ptr a))
+sizePtr :: forall a. Ptr (RawFatPtr a) -> Ptr CSize
+sizePtr ptr = castPtr (ptr `plusPtr` sizeOf' @(Ptr a))
 
--- elemsPtr :: Ptr (FatPtr a) -> Ptr a
--- elemsPtr ptr = castPtr (ptr `plusPtr` wordsize)
+elemsPtr :: Ptr (RawFatPtr a) -> Ptr a
+elemsPtr ptr = castPtr ptr
