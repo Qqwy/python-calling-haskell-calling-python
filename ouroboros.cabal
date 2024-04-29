@@ -22,7 +22,7 @@ maintainer:         qqwy@gmx.com
 extra-source-files: CHANGELOG.md
 
 library
-    exposed-modules:  CleverVector
+    exposed-modules:  SizePrefixedArray, FatPtr
 
     -- Modules included in this library but not exported.
     -- other-modules:

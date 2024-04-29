@@ -97,8 +97,8 @@ def ResultTuple(resultType):
 
 _UIntArray = SizePrefixedArray(_ctypes.c_int)
 _IntToIntFunction = _ctypes.CFUNCTYPE(None, _ctypes.c_int, _ctypes.POINTER(ResultTuple(_ctypes.c_int)))
-_dll.mappy.argtypes = [_ctypes.POINTER(_UIntArray), _IntToIntFunction]
-_dll.mappy.restype = _ctypes.POINTER(_UIntArray)
+_dll.mappy.argtypes = [_ctypes.c_void_p, _IntToIntFunction]
+_dll.mappy.restype = _ctypes.c_void_p
 def mappy(elems, fun):
   try:
     time.sleep(2)
@@ -106,9 +106,10 @@ def mappy(elems, fun):
     # Passing in the size separately would be preferable
     # ArrType = _ctypes.c_int * (len(elems) + 1)
     # arr = ArrType(*elems, 0)
-    arr = _UIntArray(*elems)
-    print(arr)
-    print(list(arr))
+    # arr = _UIntArray(len(elems), *elems)
+    # print(arr)
+    # print(list(arr))
+    arr = CleverVec(_ctypes.c_int, *elems)
 
     # NOTE: Callback functions ought to be wrapped to turn exceptions into values
     # While 'ctypes' ignores and logs exceptions, in that case 
@@ -123,7 +124,8 @@ def mappy(elems, fun):
         outParam.contents.error = True
         # outparam.contents.result remains unset
 
-    output = _dll.mappy(arr, _IntToIntFunction(fun_wrapper)).contents
+    output = _dll.mappy(_ctypes.pointer(arr), _IntToIntFunction(fun_wrapper))
+    output = _ctypes.c_void_p(output)
     # print(arr)
     return output[0:len(elems)]
   except KeyboardInterrupt as e:
