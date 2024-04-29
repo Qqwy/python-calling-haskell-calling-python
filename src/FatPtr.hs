@@ -8,7 +8,8 @@ import Foreign.Ptr
 import Foreign.ForeignPtr
 import Foreign.Marshal
 import Foreign.C.Types
-import GHC.IsList
+import GHC.IsList (IsList, Item)
+import GHC.IsList qualified as IsList
 
 -- | Intended to only be used behind a `Ptr` or `ForeignPtr`.
 --
@@ -30,13 +31,13 @@ import GHC.IsList
 --
 newtype FatPtr elem = FatPtr elem
 
-instance (IsList list, Storable (Item list)) => Storable (FatPtr (Item list)) where
-  sizeOf _ = (sizeOf' @(Ptr (Item listlike))) + sizeOf' @CSize
-  alignment _ = max (alignment' @(Ptr (Item listlike))) (alignment' @CSize)
+instance (IsList list, Storable item, (Item list) ~ item) => Storable (FatPtr item) where
+  sizeOf _ = (sizeOf' @(Ptr (Item list))) + sizeOf' @CSize
+  alignment _ = max (alignment' @(Ptr (Item list))) (alignment' @CSize)
   peek ptr = do
     size <- peek (sizePtr ptr)
     elems <- peekArray size (elemsPtr ptr)
-    pure (fromListN size elems)
+    pure (IsList.fromListN size elems)
 
   -- | Make sure to call `initialize` on the `FatPtr` before `poke`ing it!
   -- 
@@ -47,7 +48,7 @@ instance (IsList list, Storable (Item list)) => Storable (FatPtr (Item list)) wh
     let size = length elems
     poke (sizePtr ptr) size
     newElemsPtr <- reallocBytes (elemsPtr ptr) (size * sizeOf' (Item listlike))
-    pokeArray (newElemsPtr ptr) (toList elems)
+    pokeArray (newElemsPtr ptr) (IsList.toList elems)
 
 fromList :: (IsList list) => list -> IO (ForeignPtr (FatPtr (Item list)))
 fromList list = do
@@ -93,8 +94,8 @@ sizeOf' = sizeOf (undefined :: a)
 alignment' :: forall a. Storable a => Int
 alignment' = alignment (undefined :: a)
 
-sizePtr :: (IsList list) => Ptr (FatPtr list) -> Ptr CSize
-sizePtr = castPtr (ptr `plusPtr` sizeOf' @(Ptr (Item list)))
+sizePtr :: forall a. Ptr (FatPtr a) -> Ptr CSize
+sizePtr = castPtr (ptr `plusPtr` sizeOf' @(Ptr a))
 
 elemsPtr :: Ptr (FatPtr a) -> Ptr a
 elemsPtr ptr = castPtr (ptr `plusPtr` wordsize)
