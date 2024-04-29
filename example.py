@@ -8,7 +8,7 @@ import signal
 def myfun(val):
 
     print(__name__, val)
-    time.sleep(0.1)
+    time.sleep(0.5)
 
 
     return val * val * val

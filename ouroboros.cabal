@@ -29,7 +29,7 @@ library
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
-    build-depends:    base ^>=4.17.0.0, async, vector, unix
+    build-depends:    base ^>=4.19.0.0, async, vector, unix
     hs-source-dirs:   src
     default-language: Haskell2010
 
@@ -42,7 +42,7 @@ foreign-library Ouroboros
   -- Only supported on Linux, not sure if we need this:
   -- lib-version-info:    6:3:2
 
-  build-depends:       base ^>=4.17.0.0, async, vector, unix, storable-tuple
+  build-depends:       base ^>=4.19.0.0, async, vector, unix, storable-tuple
   hs-source-dirs:      src
   other-modules:       Ouroboros, SizePrefixedArray
   c-sources:           csrc/OuroborosWrapper.c

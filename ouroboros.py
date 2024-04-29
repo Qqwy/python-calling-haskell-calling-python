@@ -5,7 +5,7 @@ import time
 import errno as _errno
 
 # Load the dynamic library. This will initialize the Haskell runtime system.
-_dll = _ctypes.CDLL("Ouroboros.so")
+_dll = _ctypes.CDLL("./Ouroboros.so")
 
 # Register function signatures
 _dll.example.argtypes = [_ctypes.c_char_p]
