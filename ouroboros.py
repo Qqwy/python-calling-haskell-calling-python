@@ -5,7 +5,45 @@ import time
 import errno as _errno
 
 # Load the dynamic library. This will initialize the Haskell runtime system.
-_dll = _ctypes.CDLL("./Ouroboros.so")
+_dll = _ctypes.CDLL("Ouroboros.dylib")
+
+
+class FatStrPtr(_ctypes.Structure):
+  _fields_ = [('elems', _ctypes.c_char_p), ("size", _ctypes.c_uint64)]
+
+  def __init__(self, string):
+    if isinstance(string, bytes):
+      bytestring = string
+    elif isinstance(string, str):
+      bytestring = string.encode()
+    elif isinstance(string, FatStrPtr):
+      bytestring = str(string).encode()
+    else:
+      raise BaseException("Boom")
+    ptr = haskellAllocBytestring(bytestring)
+    self.elems = ptr
+    self.size = len(bytestring)
+
+  def __len__(self):
+    return self.size
+
+  def __getitem__(self, key):
+    return self.elems[0:self.size].__getitem__(key)
+  def __bytes__(self):
+    return self.elems[0:self.size]
+  def __str__(self):
+    return bytes(self).decode()
+
+_PurgatoryFun = _ctypes.CFUNCTYPE(None, _ctypes.POINTER(FatStrPtr), _ctypes.POINTER(FatStrPtr))
+_dll.runpython.argtypes = [_PurgatoryFun]
+_dll.runpython.restype = None
+def runpython(fun):
+  def wrapped_fun(in_ptr, out_ptr):
+    input = bytes(in_ptr.contents)
+    output = fun(input)
+    out_ptr.contents.elems = haskellAllocBytestring(output)
+    out_ptr.contents.size = len(output)
+  _dll.runpython(_PurgatoryFun(wrapped_fun))
 
 # Register function signatures
 _dll.example.argtypes = [_ctypes.c_char_p]
@@ -27,8 +65,8 @@ def haskellFree(ptr):
   haskellRealloc(ptr, 0)
   return None
 
-def haskellBytestring(bytestring):
-  ptr = _ctypes.cast(haskellMalloc(len(bytestring)), _ctypes.POINTER(_ctypes.c_char))
+def haskellAllocBytestring(bytestring):
+  ptr = _ctypes.cast(haskellMalloc(len(bytestring)), _ctypes.c_char_p)
   _ctypes.memmove(ptr, bytestring, len(bytestring))
   return ptr
 
@@ -56,7 +94,6 @@ def CleverVec(elemType, *elemVals):
   )
 
   return klass(*elemVals)
-
 
 # An array with a known size, stored as (size, elem*)-pair in memory.
 def SizePrefixedArray(elemType):

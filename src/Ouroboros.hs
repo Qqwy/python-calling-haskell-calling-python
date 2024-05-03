@@ -118,17 +118,19 @@ foreign import ccall "dynamic" purgatoryFunToHeavenFun :: FunPtr PurgatoryFun ->
 foreign export ccall runpython :: FunPtr PurgatoryFun -> IO ()
 runpython :: FunPtr PurgatoryFun -> IO ()
 runpython funPtr = do
-  let input = "{'a': 1}"
+  let input = FatPtr.fromList ("{'a': 1}" :: ByteString)
   output <- lowlevelWrap funPtr input
-  print output
+  print (FatPtr.toList output :: ByteString)
   where
-    lowlevelWrap :: FunPtr PurgatoryFun -> ByteString -> IO ByteString
-    lowlevelWrap funPtr = 
+    lowlevelWrap :: FunPtr PurgatoryFun -> ByteStr -> IO ByteStr
+    lowlevelWrap funPtr =
       \inStr ->
         alloca $ \inPtr ->
           alloca $ \outPtr -> do
-            poke inPtr (FatPtr.fromList inStr)
+            poke inPtr inStr
+            print inStr
             poke outPtr FatPtr.new
             () <- (purgatoryFunToHeavenFun funPtr) inPtr outPtr
             outStr <- peek outPtr
-            pure (FatPtr.toList outStr)
+            print outStr
+            pure outStr
