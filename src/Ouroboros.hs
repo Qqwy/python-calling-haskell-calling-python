@@ -1,4 +1,5 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GHC2021 #-}
 module Ouroboros where
 import qualified Data.Char as C
@@ -22,6 +23,12 @@ import System.Posix.Signals
 import Foreign.Storable.Tuple
 import SizePrefixedArray (SizePrefixedArray)
 import SizePrefixedArray qualified
+import FatPtr (FatPtr)
+import FatPtr qualified
+import Data.Word
+import GHC.IsList (IsList, Item)
+import GHC.IsList qualified as IsList
+import Data.ByteString (ByteString)
 
 foreign export ccall example :: CString -> IO CString
 example :: CString -> IO CString 
@@ -39,7 +46,6 @@ example cstr = do
 -- the Foreign.Marshal.Alloc functions from within Haskell
 foreign export ccall haskellRealloc :: Ptr a -> Word -> IO (Ptr a)
 haskellRealloc ptr size = reallocBytes ptr (fromIntegral size)
-
 
 
 
@@ -102,3 +108,27 @@ printOnInterrupt exception = do
 
 foo :: (CInt -> CInt) -> (Int -> Int)
 foo fun = fromIntegral . fun . fromIntegral
+
+
+
+type ByteStr = (FatPtr Word8)
+type PurgatoryFun = (Ptr ByteStr -> Ptr ByteStr -> IO ())
+
+foreign import ccall "dynamic" purgatoryFunToHeavenFun :: FunPtr PurgatoryFun -> PurgatoryFun
+foreign export ccall runpython :: FunPtr PurgatoryFun -> IO ()
+runpython :: FunPtr PurgatoryFun -> IO ()
+runpython funPtr = do
+  let input = "{'a': 1}"
+  output <- lowlevelWrap funPtr input
+  print output
+  where
+    lowlevelWrap :: FunPtr PurgatoryFun -> ByteString -> IO ByteString
+    lowlevelWrap funPtr = 
+      \inStr ->
+        alloca $ \inPtr ->
+          alloca $ \outPtr -> do
+            poke inPtr (FatPtr.fromList inStr)
+            poke outPtr FatPtr.new
+            () <- (purgatoryFunToHeavenFun funPtr) inPtr outPtr
+            outStr <- peek outPtr
+            pure (FatPtr.toList outStr)
