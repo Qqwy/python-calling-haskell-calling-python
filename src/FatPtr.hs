@@ -33,7 +33,9 @@ import System.IO.Unsafe (unsafePerformIO)
 -- The internal `elems` pointer is allocated using `Foreign.Marshal.Alloc.malloc`
 --
 data FatPtr a = FatPtr (ForeignPtr a) CSize
-  deriving (Show)
+
+instance forall a. (Show a, Storable a) => Show (FatPtr a) where
+  showsPrec x fp = showString "FatPtr.fromList " . showsPrec x (FatPtr.toList @[a] fp)
 
 data RawFatPtr a = RawFatPtr (Ptr a) CSize
   deriving (Show)

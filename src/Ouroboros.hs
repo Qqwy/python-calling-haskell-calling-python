@@ -112,16 +112,21 @@ foo fun = fromIntegral . fun . fromIntegral
 
 
 type ByteStr = (FatPtr Word8)
-type PurgatoryFun = (Ptr ByteStr -> Ptr ByteStr -> IO ())
+type PurgatoryFun = (Ptr ByteStr -> Ptr ByteStr -> IO Bool)
 
 foreign import ccall "dynamic" purgatoryFunToHeavenFun :: FunPtr PurgatoryFun -> PurgatoryFun
-foreign export ccall runpython :: FunPtr PurgatoryFun -> IO ()
-runpython :: FunPtr PurgatoryFun -> IO ()
-runpython funPtr = do
+foreign export ccall runpython :: FunPtr PurgatoryFun -> IO Bool
+runpython :: FunPtr PurgatoryFun -> IO Bool
+runpython funPtr = handle exceptionToBool $ do
+  putStr "Haskell: Passing input "
   let input = FatPtr.fromList ("{'a': 1}" :: ByteString)
   output <- lowlevelWrap funPtr input
+  putStr "Haskell: Received output "
   print (FatPtr.toList output :: ByteString)
+  pure True
   where
+    exceptionToBool :: SomeException -> IO Bool
+    exceptionToBool _ = pure False
     lowlevelWrap :: FunPtr PurgatoryFun -> ByteStr -> IO ByteStr
     lowlevelWrap funPtr =
       \inStr ->
@@ -129,8 +134,13 @@ runpython funPtr = do
           alloca $ \outPtr -> do
             poke inPtr inStr
             print inStr
-            poke outPtr FatPtr.new
-            () <- (purgatoryFunToHeavenFun funPtr) inPtr outPtr
+            succeeded <- (purgatoryFunToHeavenFun funPtr) inPtr outPtr
             outStr <- peek outPtr
             print outStr
-            pure outStr
+            if not succeeded then do
+              putStrLn "Haskell: Python threw an error, rethrowing"
+              -- print (FatPtr.toList outStr :: ByteString)
+              throw UserInterrupt
+            else do
+              putStrLn "Haskell: Python succeeded"
+              pure outStr

@@ -10,8 +10,10 @@ _dll = _ctypes.CDLL("Ouroboros.dylib")
 
 class FatStrPtr(_ctypes.Structure):
   _fields_ = [('elems', _ctypes.c_char_p), ("size", _ctypes.c_uint64)]
-
   def __init__(self, string):
+    self.fill_with(string)
+
+  def fill_with(self, string):
     if isinstance(string, bytes):
       bytestring = string
     elif isinstance(string, str):
@@ -34,19 +36,39 @@ class FatStrPtr(_ctypes.Structure):
   def __str__(self):
     return bytes(self).decode()
 
-_PurgatoryFun = _ctypes.CFUNCTYPE(None, _ctypes.POINTER(FatStrPtr), _ctypes.POINTER(FatStrPtr))
-_dll.runpython.argtypes = [_PurgatoryFun]
-_dll.runpython.restype = None
-def runpython(fun):
-  def wrapped_fun(in_ptr, out_ptr):
+def pythonFunToHaskellFun(fun):
+  def wrapped_fun(in_ptr, out_ptr): 
     input = bytes(in_ptr.contents)
-    output = fun(input)
-    out_ptr.contents.elems = haskellAllocBytestring(output)
-    out_ptr.contents.size = len(output)
-  _dll.runpython(_PurgatoryFun(wrapped_fun))
+    try:
+      output = fun(input)
+      succeeded = True
+    except:
+      import sys
+      output = repr(sys.exception()).encode()
+      succeeded = False
+    # NOTE: `ptr.contents = FatStrPtr(output)` does not work 
+    # as (perhaps surprisingly) that changes where the pointer points 
+    # rather than what it points to
+    out_ptr.contents.fill_with(output) 
+    return succeeded
+
+  return _PurgatoryFun(wrapped_fun)
+
+
+_PurgatoryFun = _ctypes.CFUNCTYPE(_ctypes.c_bool, _ctypes.POINTER(FatStrPtr), _ctypes.POINTER(FatStrPtr))
+_dll.runpython.argtypes = [_PurgatoryFun]
+_dll.runpython.restype = _ctypes.c_bool
+def runpython(fun):
+  result = _dll.runpython(pythonFunToHaskellFun(fun))
+  if result:
+    # print("Python: Haskell succeeded")
+    None
+  else:
+    print("Python: Haskell threw an error, rethrowing")
+    raise KeyboardInterrupt
 
 # Register function signatures
-_dll.example.argtypes = [_ctypes.c_char_p]
+_dll.example.argtypes = [_ctypes.c_char_p]# 
 _dll.example.restype = _ctypes.c_char_p
 def example(string):
   input = string.encode()
@@ -65,7 +87,12 @@ def haskellFree(ptr):
   haskellRealloc(ptr, 0)
   return None
 
-def haskellAllocBytestring(bytestring):
+def haskellAllocBytestring(string):
+  if isinstance(string, bytes):
+    bytestring = string
+  elif isinstance(string, str):
+    bytestring = string.encode()
+
   ptr = _ctypes.cast(haskellMalloc(len(bytestring)), _ctypes.c_char_p)
   _ctypes.memmove(ptr, bytestring, len(bytestring))
   return ptr
