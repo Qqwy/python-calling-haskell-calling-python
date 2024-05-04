@@ -183,11 +183,11 @@ haskellDiv = throwingJSONFunToInfernoFun impl
   where
     impl :: (Integer, Integer) -> IO Integer
     impl (num, denom) = 
-      -- checkpointMany [Annotation.toAnnotation ("Hello" :: String)] $
+      checkpointMany [Annotation.toAnnotation ("Hello" :: String)] $ evaluateDeep =<<
       innerDiv num denom
 
 innerDiv :: HasCallStack => Integer -> Integer -> IO Integer
-innerDiv num denom = 
+innerDiv num denom =
   if denom == 42 then 
     throw E.UserInterrupt 
   else
@@ -235,7 +235,7 @@ throwingFunToJSONFun fun = \inputEitherLazy -> do
     Left err ->
       pure $ Left $ exceptionToJSON $ exceptionWithCallStack $ toException $ Aeson.AesonException err
     Right input -> do
-      outputEither <- E.try (evaluateDeep =<< fun input)
+      outputEither <- try (checkpointCallStack . evaluateDeep =<< fun input)
       pure $ Bifunctor.first exceptionToJSON outputEither
 
 exceptionToJSON :: AnnotatedException SomeException -> Aeson.Value
