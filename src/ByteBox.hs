@@ -21,7 +21,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Unsafe as ByteString.Unsafe
 
-newtype ByteBox = ByteBox (Ptr ByteBox)
+newtype ByteBox = ByteBox (Ptr CStringLen)
 
 instance Show ByteBox where
   show (ByteBox ptr) = unsafePerformIO $ do 
@@ -104,6 +104,17 @@ withCStringLenAsByteBox cstringlen action =
   alloca $ \bb -> do
     pokeFromCStringLen bb cstringlen
     (action bb)
+
+-- | Low-level conversion to write an (owned) ByteString into a (borrowed) ByteBox
+-- O(n), has to copy the internal bytes.
+--
+-- The resulting ByteBox' string buffer should be freed with `free` when no longer in use.
+pokeFromByteString :: ByteBox -> ByteString -> IO ()
+pokeFromByteString outBox bs = do
+  ByteString.Unsafe.unsafeUseAsCStringLen bs $ \(inPtr, len) -> do
+    resPtr <- Foreign.Marshal.mallocBytes len
+    Foreign.Marshal.copyBytes resPtr inPtr len
+    pokeFromCStringLen outBox (resPtr, len)
 
 -- | Low-level conversion between a ByteBox and a CStringLen
 -- Both objects will point to the same underlying buffer

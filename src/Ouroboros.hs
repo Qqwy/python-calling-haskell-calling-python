@@ -15,9 +15,9 @@ import Control.Concurrent (threadDelay, yield)
 import Control.Concurrent.Async (async, wait, race, withAsync, cancel, forConcurrently)
 import Data.Vector.Storable (Vector)
 import qualified Data.Vector.Storable as SVector
-import Control.Exception
+-- import Control.Exception
 
-import Control.Exception as E
+import qualified Control.Exception as E
 import Control.Concurrent
 import System.Posix.Signals
 import Foreign.Storable.Tuple
@@ -29,8 +29,15 @@ import Data.Word
 import GHC.IsList (IsList, Item)
 import GHC.IsList qualified as IsList
 import Data.ByteString (ByteString)
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Lazy qualified as ByteString.Lazy
 import ByteBox (ByteBox)
 import ByteBox qualified
+import Data.Aeson qualified as Aeson
+import qualified Type.Reflection as Reflection
+import qualified Data.Bifunctor as Bifunctor
+import UnliftIO.Exception
+import Control.DeepSeq (NFData)
 
 foreign export ccall example :: CString -> IO CString
 example :: CString -> IO CString 
@@ -81,7 +88,7 @@ mappy inPtr funPtr = handle printOnInterrupt $ do
               void $ fun val outputParam
               (err, result) <- peek outputParam
               if err then 
-                throw UserInterrupt 
+                E.throw E.UserInterrupt 
               else 
                 pure result
     list' <- mapM fun' list
@@ -102,11 +109,11 @@ nag = do
   threadDelay 1000000
   nag
 
-printOnInterrupt exception | exception == UserInterrupt = do
+printOnInterrupt exception | exception == E.UserInterrupt = do
   print "User interrupt was received!"
-  throw exception
+  throwIO exception
 printOnInterrupt exception = do
-  throw exception
+  throwIO exception
 
 foo :: (CInt -> CInt) -> (Int -> Int)
 foo fun = fromIntegral . fun . fromIntegral
@@ -142,7 +149,7 @@ runpython funPtr = handle exceptionToBool $ do
             if not succeeded then do
               putStrLn "Haskell: Python threw an error, rethrowing"
               -- print (FatPtr.toList outStr :: ByteString)
-              throw UserInterrupt
+              throwIO E.UserInterrupt
             else do
               putStrLn "Haskell: Python succeeded"
               pure outStr
@@ -158,3 +165,81 @@ runpython2 funPtr = do
   putStr "Haskell -- The output is: "
   print output
 
+foreign export ccall appendMessage :: InfernoFun
+appendMessage :: InfernoFun
+appendMessage = bytestringFunToInfernoFun (\x -> pure $ x <> " Haskell is cooler!")
+
+bytestringFunToInfernoFun :: (ByteString -> IO ByteString) -> InfernoFun
+bytestringFunToInfernoFun fun = 
+  \inputBox -> \outputBox -> do
+    input <- ByteBox.toBorrowingByteString inputBox
+    output <- fun input
+    ByteBox.pokeFromByteString outputBox output
+
+foreign export ccall printJSON :: InfernoFun
+printJSON :: InfernoFun
+printJSON = jsonFunToInfernoFun fun
+  where
+    fun :: Either String Aeson.Value -> IO Aeson.Value
+    fun jsonValue =
+      case jsonValue of
+        Left error -> do
+          putStrLn $ "Error parsing JSON: " <> error
+          pure Aeson.Null
+        Right (value :: Aeson.Value) -> do
+          putStr "Parsed JSON representation: "
+          print value
+          pure value
+
+jsonFunToInfernoFun :: (Aeson.FromJSON input, Aeson.ToJSON output) => (Either String input -> IO output) -> InfernoFun
+jsonFunToInfernoFun fun = 
+  bytestringFunToInfernoFun $ \inputStr -> do
+    print inputStr
+    let inputEither = Aeson.eitherDecodeStrict inputStr
+    outputValue <- fun inputEither
+    let output = ByteString.Lazy.toStrict $ Aeson.encode outputValue
+    pure output
+
+
+-- foreign export ccall pythonCallsHaskellJSON :: InfernoFun
+-- pythonCallsHaskellJSON :: InfernoFun
+-- pythonCallsHaskellJSON = pythonCallsHaskell
+
+foreign export ccall haskellDiv :: InfernoFun
+haskellDiv :: InfernoFun
+haskellDiv = throwingJSONFunToInfernoFun impl
+  where
+    impl :: (Integer, Integer) -> IO Integer
+    impl (num, denom) = E.throw E.UserInterrupt -- pure $ num `div` denom
+
+throwingJSONFunToInfernoFun :: (Aeson.FromJSON input, NFData output, Aeson.ToJSON output) => (input -> IO output) -> InfernoFun
+throwingJSONFunToInfernoFun fun =
+  jsonFunToInfernoFun $ \inputEither ->
+    case inputEither of
+      Left error ->
+        pure $ Left $ exceptionToJSON $ toException $ InputParseException error
+      Right input -> do
+        result <- E.try (evaluateDeep =<< fun input)
+        pure $ Bifunctor.first exceptionToJSON result
+
+newtype InputParseException = InputParseException String
+  deriving (Show)
+
+instance Exception InputParseException
+
+exceptionToJSON :: SomeException -> Aeson.Value
+exceptionToJSON exception = 
+  Aeson.object 
+    ["name" Aeson..= exceptionName exception
+    ,"message" Aeson..= displayException exception
+    ]
+
+exceptionName :: SomeException -> String
+exceptionName e | Just (asyncEx :: E.AsyncException) <- fromException e = 
+  case asyncEx of
+    E.StackOverflow -> "StackOverflow"
+    E.HeapOverflow -> "HeapOverflow"
+    E.ThreadKilled -> "ThreadKilled"
+    E.UserInterrupt -> "UserInterrupt"
+
+exceptionName (SomeException syncEx) = show $ Reflection.typeOf syncEx

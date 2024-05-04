@@ -10,8 +10,9 @@ _dll = _ctypes.CDLL("Ouroboros.dylib")
 
 class ByteBox(_ctypes.Structure):
   _fields_ = [('elems', _ctypes.c_char_p), ("size", _ctypes.c_uint64)]
-  def __init__(self, string):
-    self.fill_with(string)
+  def __init__(self, string = None):
+    if string != None:
+      self.fill_with(string)
 
   def fill_with(self, string):
     if isinstance(string, bytes) or isinstance(string, ByteBox):
@@ -69,6 +70,71 @@ _dll.runpython2.argtypes = [_PurgatoryFun]
 _dll.runpython2.restype = None
 def runpython2(fun):
   _dll.runpython2(pythonFunToHaskellFun(fun))
+
+_dll.appendMessage.argtypes = [_ctypes.POINTER(ByteBox), _ctypes.POINTER(ByteBox)]
+_dll.appendMessage.restype = None
+def appendMessage(string):
+  inBox = ByteBox(string)
+  outBox = ByteBox()
+  _dll.appendMessage(inBox, outBox)
+  return bytes(outBox)
+
+_dll.printJSON.argtypes = [_ctypes.POINTER(ByteBox), _ctypes.POINTER(ByteBox)]
+_dll.printJSON.restype = None
+def printJSON(inObject):
+  import json
+  inStr = json.dumps(inObject)
+  inBox = ByteBox(inStr)
+  outBox = ByteBox()
+  _dll.printJSON(inBox, outBox)
+  outStr = bytes(outBox)
+  outObject = json.loads(outStr)
+  return outObject
+
+def haskellExceptionToPythonException(name, message):
+  # Async exceptions
+  if name == "UserInterrupt":
+    return KeyboardInterrupt
+  if name == "StackOverflow":
+    return RecursionError(message)
+  if name == "HeapOverflow":
+    return MemoryError(message)
+  if name == "ThreadKilled": # NOTE: This is not 1:1 the same, but the closest
+    return SystemExit(message)
+  # Sync exceptions
+  if name == "ArithException" and message == "divide by zero":
+    return ZeroDivisionError
+  if name == "ArithException":
+    return ArithmeticError(message)
+  return HaskellException(name, message)
+  
+
+
+class HaskellException(Exception):
+  def __init__(self, name, message):
+    self.name = name
+    self.displayMessage = message
+
+_dll.haskellDiv.argtypes = [_ctypes.POINTER(ByteBox), _ctypes.POINTER(ByteBox)]
+_dll.haskellDiv.restype = None
+def haskellDiv(num, denom):
+  import json
+  inStr = json.dumps([num, denom])
+  print(inStr)
+  inBox = ByteBox(inStr)
+  print(inBox)
+  outBox = ByteBox()
+  _dll.haskellDiv(inBox, outBox)
+  outStr = bytes(outBox)
+  outObject = json.loads(outStr)
+  if 'Right' in outObject:
+    return outObject['Right']
+  elif 'Left' in outObject and 'name' in outObject['Left'] and 'message' in outObject['Left']:
+    name = outObject['Left']['name']
+    message = outObject['Left']['message']
+    raise haskellExceptionToPythonException(name, message)
+  else:
+    raise Exception(f"JSON in unexpected format returned from Haskell FFI call: {outObject}")
 
 
 # Register function signatures
