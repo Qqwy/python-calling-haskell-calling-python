@@ -91,7 +91,7 @@ def printJSON(inObject):
   outObject = json.loads(outStr)
   return outObject
 
-def raiseHaskellExceptionToPythonException(name, message, callstack, annotations = []):
+def raiseHaskellExceptionAsPythonException(name, message, callstack, annotations = []):
   res = None
   # Async exceptions
   if name == "UserInterrupt":
@@ -134,7 +134,7 @@ def haskellCallstackToPythonTraceback(callstack):
     return None
   import tblib
   tb_next = None
-  for name, info in reversed(callstack):
+  for name, info in callstack:
     code = {'co_filename': info['file'], 'co_name': name}
     frame = {'f_lineno': info['line'], 'f_code': code, 'f_globals': {}}
     current = {'tb_frame': frame, 'tb_lineno': info['line'], 'tb_next': tb_next}
@@ -162,7 +162,7 @@ def haskellDiv(num, denom):
   elif 'Left' in outObject and 'name' in outObject['Left'] and 'message' in outObject['Left']:
     error = outObject['Left']
     # print(error)
-    raiseHaskellExceptionToPythonException(error['name'], error['message'], error['callstack'], error['annotations'])
+    raiseHaskellExceptionAsPythonException(error['name'], error['message'], error['callstack'], error['annotations'])
   else:
     raise Exception(f"JSON in unexpected format returned from Haskell FFI call: {outObject}")
 
