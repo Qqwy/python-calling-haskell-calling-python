@@ -43,6 +43,7 @@ import UnliftIO.Exception (evaluateDeep, handle)
 import Control.DeepSeq (NFData)
 import GHC.Stack
 import qualified Data.Annotation as Annotation
+import Data.Maybe (maybeToList)
 
 foreign export ccall example :: CString -> IO CString
 example :: CString -> IO CString 
@@ -215,7 +216,9 @@ haskellDiv :: InfernoFun
 haskellDiv = throwingJSONFunToInfernoFun impl
   where
     impl :: HasCallStack => (Integer, Integer) -> IO Integer
-    impl (num, denom) = throw E.UserInterrupt -- pure $ innerDiv num denom
+    impl (num, denom) = 
+      checkpointCallStackWith [Annotation.toAnnotation ("Hello" :: String)] $
+      pure $ innerDiv num denom
 
 innerDiv :: HasCallStack => Integer -> Integer -> Integer
 innerDiv num denom = num `div` denom

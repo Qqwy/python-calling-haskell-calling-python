@@ -121,12 +121,17 @@ def raiseHaskellExceptionToPythonException(name, message, callstack, annotations
 
 class HaskellException(Exception):
   def __init__(self, name, message, callstack, annotations = []):
-    self.__traceback__ = haskellCallstackToPythonTraceback(callstack)
+    traceback = haskellCallstackToPythonTraceback(callstack)
+    if traceback is not None:
+      self.__traceback__ = traceback
     for annotation in annotations:
       self.add_note(annotation)
     super().__init__(name, message)
 
 def haskellCallstackToPythonTraceback(callstack):
+  print(callstack)
+  if callstack is None:
+    return None
   import tblib
   tb_next = None
   for name, info in reversed(callstack):
@@ -134,8 +139,10 @@ def haskellCallstackToPythonTraceback(callstack):
     frame = {'f_lineno': info['line'], 'f_code': code, 'f_globals': {}}
     current = {'tb_frame': frame, 'tb_lineno': info['line'], 'tb_next': tb_next}
     tb_next = current
-    
-  return tblib.Traceback.from_dict(tb_next).as_traceback()
+  if tb_next is not None:
+    return tblib.Traceback.from_dict(tb_next).as_traceback()
+  else:
+    return None
 
 
 _dll.haskellDiv.argtypes = [_ctypes.POINTER(ByteBox), _ctypes.POINTER(ByteBox)]
@@ -143,9 +150,9 @@ _dll.haskellDiv.restype = None
 def haskellDiv(num, denom):
   import json
   inStr = json.dumps([num, denom])
-  print(inStr)
+  # print(inStr)
   inBox = ByteBox(inStr)
-  print(inBox)
+  # print(inBox)
   outBox = ByteBox()
   _dll.haskellDiv(inBox, outBox)
   outStr = bytes(outBox)
@@ -154,6 +161,7 @@ def haskellDiv(num, denom):
     return outObject['Right']
   elif 'Left' in outObject and 'name' in outObject['Left'] and 'message' in outObject['Left']:
     error = outObject['Left']
+    print(error)
     raiseHaskellExceptionToPythonException(error['name'], error['message'], error['callstack'], error['annotations'])
   else:
     raise Exception(f"JSON in unexpected format returned from Haskell FFI call: {outObject}")
