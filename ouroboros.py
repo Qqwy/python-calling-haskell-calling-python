@@ -8,13 +8,13 @@ import errno as _errno
 _dll = _ctypes.CDLL("Ouroboros.dylib")
 
 
-class FatStrPtr(_ctypes.Structure):
+class ByteBox(_ctypes.Structure):
   _fields_ = [('elems', _ctypes.c_char_p), ("size", _ctypes.c_uint64)]
   def __init__(self, string):
     self.fill_with(string)
 
   def fill_with(self, string):
-    if isinstance(string, bytes) or isinstance(string, FatStrPtr):
+    if isinstance(string, bytes) or isinstance(string, ByteBox):
       bytestring = bytes(string)
     elif isinstance(string, str):
       bytestring = string.encode()
@@ -44,7 +44,7 @@ def pythonFunToHaskellFun(fun):
       import sys
       output = repr(sys.exception()).encode()
       succeeded = False
-    # NOTE: `ptr.contents = FatStrPtr(output)` does not work 
+    # NOTE: `ptr.contents = ByteBox(output)` does not work 
     # as (perhaps surprisingly) that changes where the pointer points 
     # rather than what it points to
     out_ptr.contents.fill_with(output) 
@@ -53,7 +53,7 @@ def pythonFunToHaskellFun(fun):
   return _PurgatoryFun(wrapped_fun)
 
 
-_PurgatoryFun = _ctypes.CFUNCTYPE(_ctypes.c_bool, _ctypes.POINTER(FatStrPtr), _ctypes.POINTER(FatStrPtr))
+_PurgatoryFun = _ctypes.CFUNCTYPE(_ctypes.c_bool, _ctypes.POINTER(ByteBox), _ctypes.POINTER(ByteBox))
 _dll.runpython.argtypes = [_PurgatoryFun]
 _dll.runpython.restype = _ctypes.c_bool
 def runpython(fun):
@@ -64,6 +64,12 @@ def runpython(fun):
   else:
     print("Python: Haskell threw an error, rethrowing")
     raise KeyboardInterrupt
+
+_dll.runpython2.argtypes = [_PurgatoryFun]
+_dll.runpython2.restype = None
+def runpython2(fun):
+  _dll.runpython2(pythonFunToHaskellFun(fun))
+
 
 # Register function signatures
 _dll.example.argtypes = [_ctypes.c_char_p]# 

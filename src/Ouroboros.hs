@@ -29,6 +29,8 @@ import Data.Word
 import GHC.IsList (IsList, Item)
 import GHC.IsList qualified as IsList
 import Data.ByteString (ByteString)
+import ByteBox (ByteBox)
+import ByteBox qualified
 
 foreign export ccall example :: CString -> IO CString
 example :: CString -> IO CString 
@@ -144,4 +146,15 @@ runpython funPtr = handle exceptionToBool $ do
             else do
               putStrLn "Haskell: Python succeeded"
               pure outStr
+
+type InfernoFun = (ByteBox -> ByteBox -> IO ())
+foreign import ccall "dynamic" fromInfernoFun :: FunPtr InfernoFun -> InfernoFun
+foreign export ccall runpython2 :: FunPtr InfernoFun -> IO ()
+runpython2 :: FunPtr InfernoFun -> IO ()
+runpython2 funPtr = do
+  let fun = ByteBox.inferno (fromInfernoFun funPtr)
+  let input = "Hello, world!"
+  output <- fun input
+  putStr "Haskell -- The output is: "
+  print output
 
