@@ -14,16 +14,14 @@ class FatStrPtr(_ctypes.Structure):
     self.fill_with(string)
 
   def fill_with(self, string):
-    if isinstance(string, bytes):
-      bytestring = string
+    if isinstance(string, bytes) or isinstance(string, FatStrPtr):
+      bytestring = bytes(string)
     elif isinstance(string, str):
       bytestring = string.encode()
-    elif isinstance(string, FatStrPtr):
-      bytestring = str(string).encode()
     else:
-      raise BaseException("Boom")
-    ptr = haskellAllocBytestring(bytestring)
-    self.elems = ptr
+      raise Exception("Cannot convert input object {string} to str or bytes")
+    haskellFree(self.elems)
+    self.elems = haskellMallocBytestring(bytestring)
     self.size = len(bytestring)
 
   def __len__(self):
@@ -59,8 +57,8 @@ _PurgatoryFun = _ctypes.CFUNCTYPE(_ctypes.c_bool, _ctypes.POINTER(FatStrPtr), _c
 _dll.runpython.argtypes = [_PurgatoryFun]
 _dll.runpython.restype = _ctypes.c_bool
 def runpython(fun):
-  result = _dll.runpython(pythonFunToHaskellFun(fun))
-  if result:
+  succeeded = _dll.runpython(pythonFunToHaskellFun(fun))
+  if succeeded:
     # print("Python: Haskell succeeded")
     None
   else:
@@ -87,7 +85,7 @@ def haskellFree(ptr):
   haskellRealloc(ptr, 0)
   return None
 
-def haskellAllocBytestring(string):
+def haskellMallocBytestring(string):
   if isinstance(string, bytes):
     bytestring = string
   elif isinstance(string, str):
