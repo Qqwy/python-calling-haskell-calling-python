@@ -2,6 +2,14 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE TypeFamilies #-}
+{- | A wrapper of the common idiom 
+of passing a bytestring together with its length 
+back-and-forth over a foreign function interface boundary.
+
+This module is relatively low-level. This means:
+- To ensure easier reasoning about sequencing, nearly all functions use IO
+- Almost all functions come with safety invariants that the caller should uphold; these are not specifically prefixed with `unsafe`.
+-}
 module ByteBox where
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -16,9 +24,16 @@ import qualified Data.ByteString.Unsafe as ByteString.Unsafe
 newtype ByteBox = ByteBox (Ptr ByteBox)
 
 instance Show ByteBox where
-  show bb = unsafePerformIO $ do 
-    bytestring <- unsafeToBorrowingByteString bb
-    pure (show bytestring)
+  show (ByteBox ptr) = unsafePerformIO $ do 
+    bytestring <- toBorrowingByteString (ByteBox ptr)
+    pure ("ByteBox " <> show ptr <> " " <> show (ByteString.length bytestring) <> " " <> show bytestring)
+
+inferno :: (ByteBox -> ByteBox -> IO ()) -> ByteString -> IO ByteString
+inferno rawFun = \input -> 
+  withByteStringAsByteBox input $ \inputBox ->
+    alloca $ \outputBox -> do
+      () <- rawFun inputBox outputBox
+      toOwningByteString outputBox
 
 -- O(1). The resulting ByteString shares the underlying buffer.
 --
@@ -30,8 +45,8 @@ instance Show ByteBox where
 -- Unsafe: If the original buffer were to be changed after this function returns, 
 -- this would show up in the ByteString
 -- which would break referential transparency
-unsafeToBorrowingByteString :: ByteBox -> IO ByteString
-unsafeToBorrowingByteString bb = do
+toBorrowingByteString :: ByteBox -> IO ByteString
+toBorrowingByteString bb = do
   cstringlen <- peekIntoCStringLen bb
   ByteString.Unsafe.unsafePackCStringLen cstringlen
 
@@ -44,8 +59,8 @@ unsafeToBorrowingByteString bb = do
 -- which would break referential transparency
 -- 
 -- 2. Do not free the original ByteBox as that would cause a double-free.
-unsafeToOwningByteString :: ByteBox -> IO ByteString
-unsafeToOwningByteString bb = do
+toOwningByteString :: ByteBox -> IO ByteString
+toOwningByteString bb = do
   cstringlen <- peekIntoCStringLen bb
   ByteString.Unsafe.unsafePackMallocCStringLen cstringlen
 
@@ -61,34 +76,54 @@ copyToByteString bb = do
 --
 -- Note that the ByteBox' pointer itself is _not_ cleaned up;
 -- it is expected that the ByteBox itself is either:
--- - allocated using `alloca`, which will clean up once exiting the scope
+-- - allocated using `alloca` (or any of the `with*` wrappers), which will clean up once exiting the scope
 -- - read from a borrowed ptr that someone else is supposed to clean up.
-unsafeFree :: ByteBox -> IO ()
-unsafeFree (ByteBox ptr) = do
+free :: ByteBox -> IO ()
+free (ByteBox ptr) = do
   Foreign.Marshal.free (castPtr ptr :: CString)
 
+withStringAsByteBox :: String -> (ByteBox -> IO a) -> IO a
+withStringAsByteBox str action = 
+  withCStringLen str $ \cl -> 
+    withCStringLenAsByteBox cl action
+
+-- | Passes the ByteString to the function as a ByteBox. O(1)
+--
+-- NOTE: The function should not alter the ByteBox,
+-- as changes would show up in the original bytestring.
 withByteStringAsByteBox :: ByteString -> (ByteBox -> IO a) -> IO a
 withByteStringAsByteBox bs action =
-  ByteString.useAsCStringLen bs $ \cstringlen -> 
-    withCStringLenAsByteBox cstringlen action
+  ByteString.Unsafe.unsafeUseAsCStringLen bs $ \cl -> 
+    withCStringLenAsByteBox cl action
 
+-- | Passes the CStringLen to the function as a ByteBox. O(1)
+--
+-- Does _no_ cleanup of the internal string buffer once the function returns.
 withCStringLenAsByteBox :: CStringLen -> (ByteBox -> IO a) -> IO a
 withCStringLenAsByteBox cstringlen action =
   alloca $ \bb -> do
     pokeFromCStringLen bb cstringlen
-    action bb
+    (action bb)
 
+-- | Low-level conversion between a ByteBox and a CStringLen
+-- Both objects will point to the same underlying buffer
 pokeFromCStringLen :: ByteBox -> CStringLen -> IO ()
 pokeFromCStringLen (ByteBox ptr) (str, len) = do
   poke (castPtr ptr) str
   poke (castPtr ptr `plusPtr` sizeOf (undefined :: CString)) len
 
+-- | Low-level conversion between a CStringLen and a ByteBox
+-- Both objects will point to the same underlying buffer
 peekIntoCStringLen :: ByteBox -> IO CStringLen
 peekIntoCStringLen (ByteBox ptr) = do
   str <- peek (castPtr ptr)
   len <- peek (castPtr ptr `plusPtr` sizeOf (undefined ::CString))
   pure (str, len)
 
+-- Runs the given action, passing it a newly-built (empty!) ByteBox.
+--
+-- This is a very low-level function, prefer using the `with*` style functions
+-- which are high-level wrappers around this.
 alloca :: (ByteBox -> IO a) -> IO a
 alloca action = Foreign.Marshal.allocaBytesAligned sizeOf' alignment' $ \ptr -> action (ByteBox ptr)
   where
