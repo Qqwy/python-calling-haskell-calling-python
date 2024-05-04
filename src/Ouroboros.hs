@@ -134,31 +134,33 @@ foreign export ccall runpython :: FunPtr PurgatoryFun -> IO Bool
 runpython :: FunPtr PurgatoryFun -> IO Bool
 runpython funPtr = handle exceptionToBool $ do
   putStr "Haskell: Passing input "
+  let fun = funPtrToByteStrFun funPtr
   let input = FatPtr.fromList ("{'a': 1}" :: ByteString)
-  output <- lowlevelWrap funPtr input
+  output <- fun input
   putStr "Haskell: Received output "
   print (FatPtr.toList output :: ByteString)
   pure True
   where
     exceptionToBool :: SomeException -> IO Bool
     exceptionToBool _ = pure False
-    lowlevelWrap :: FunPtr PurgatoryFun -> ByteStr -> IO ByteStr
-    lowlevelWrap funPtr =
-      \inStr ->
-        alloca $ \inPtr ->
-          alloca $ \outPtr -> do
-            poke inPtr inStr
-            print inStr
-            succeeded <- (purgatoryFunToHeavenFun funPtr) inPtr outPtr
-            outStr <- peek outPtr
-            print outStr
-            if not succeeded then do
-              putStrLn "Haskell: Python threw an error, rethrowing"
-              -- print (FatPtr.toList outStr :: ByteString)
-              throw E.UserInterrupt
-            else do
-              putStrLn "Haskell: Python succeeded"
-              pure outStr
+
+funPtrToByteStrFun :: FunPtr PurgatoryFun -> ByteStr -> IO ByteStr
+funPtrToByteStrFun funPtr =
+  \inStr ->
+    alloca $ \inPtr ->
+      alloca $ \outPtr -> do
+        poke inPtr inStr
+        print inStr
+        succeeded <- (purgatoryFunToHeavenFun funPtr) inPtr outPtr
+        outStr <- peek outPtr
+        print outStr
+        if not succeeded then do
+          putStrLn "Haskell: Python threw an error, rethrowing"
+          -- print (FatPtr.toList outStr :: ByteString)
+          throw E.UserInterrupt
+        else do
+          putStrLn "Haskell: Python succeeded"
+          pure outStr
 
 type InfernoFun = (ByteBox -> ByteBox -> IO ())
 foreign import ccall "dynamic" fromInfernoFun :: FunPtr InfernoFun -> InfernoFun
@@ -175,7 +177,23 @@ foreign export ccall appendMessage :: InfernoFun
 appendMessage :: InfernoFun
 appendMessage = bytestringFunToInfernoFun (\x -> pure $ x <> " Haskell is cooler!")
 
-bytestringFunToInfernoFun :: (ByteString -> IO ByteString) -> InfernoFun
+foreign export ccall haskellDiv :: InfernoFun
+haskellDiv :: HasCallStack => InfernoFun
+haskellDiv = throwingJSONFunToInfernoFun impl
+  where
+    impl :: (Integer, Integer) -> IO Integer
+    impl (num, denom) = 
+      -- checkpointMany [Annotation.toAnnotation ("Hello" :: String)] $
+      innerDiv num denom
+
+innerDiv :: HasCallStack => Integer -> Integer -> IO Integer
+innerDiv num denom = 
+  if denom == 42 then 
+    throw E.UserInterrupt 
+  else
+    pure $ num `div` denom
+
+bytestringFunToInfernoFun :: HasCallStack => (ByteString -> IO ByteString) -> InfernoFun
 bytestringFunToInfernoFun fun = 
   \inputBox -> \outputBox -> do
     input <- ByteBox.toBorrowingByteString inputBox
@@ -189,52 +207,36 @@ printJSON = jsonFunToInfernoFun fun
     fun :: Either String Aeson.Value -> IO Aeson.Value
     fun jsonValue =
       case jsonValue of
-        Left error -> do
-          putStrLn $ "Error parsing JSON: " <> error
+        Left err -> do
+          putStrLn $ "Error parsing JSON: " <> err
           pure Aeson.Null
         Right (value :: Aeson.Value) -> do
           putStr "Parsed JSON representation: "
           print value
           pure value
 
-jsonFunToInfernoFun :: (Aeson.FromJSON input, Aeson.ToJSON output) => (Either String input -> IO output) -> InfernoFun
-jsonFunToInfernoFun fun = 
-  bytestringFunToInfernoFun $ \inputStr -> do
-    print inputStr
-    let inputEither = Aeson.eitherDecodeStrict inputStr
-    outputValue <- fun inputEither
-    let output = ByteString.Lazy.toStrict $ Aeson.encode outputValue
-    pure output
+jsonFunToInfernoFun :: HasCallStack => (Aeson.FromJSON input, Aeson.ToJSON output) => (Either String input -> IO output) -> InfernoFun
+jsonFunToInfernoFun fun = bytestringFunToInfernoFun (jsonFunToBytestringFun fun)
 
+jsonFunToBytestringFun :: HasCallStack => (Aeson.FromJSON input, Aeson.ToJSON output) => (Either String input -> IO output) -> (ByteString -> IO ByteString)
+jsonFunToBytestringFun fun = \inputStr -> do
+  let inputEither = Aeson.eitherDecodeStrict inputStr
+  outputValue <- fun inputEither
+  let output = ByteString.Lazy.toStrict $ Aeson.encode outputValue
+  pure output
 
--- foreign export ccall pythonCallsHaskellJSON :: InfernoFun
--- pythonCallsHaskellJSON :: InfernoFun
--- pythonCallsHaskellJSON = pythonCallsHaskell
+throwingJSONFunToInfernoFun :: HasCallStack => (NFData input, Aeson.FromJSON input, NFData output, Aeson.ToJSON output) => (input -> IO output) -> InfernoFun
+throwingJSONFunToInfernoFun fun = jsonFunToInfernoFun (throwingFunToJSONFun fun)
 
-foreign export ccall haskellDiv :: InfernoFun
-haskellDiv :: InfernoFun
-haskellDiv = throwingJSONFunToInfernoFun impl
-  where
-    impl :: HasCallStack => (Integer, Integer) -> IO Integer
-    impl (num, denom) = 
-      checkpointCallStackWith [Annotation.toAnnotation ("Hello" :: String)] $
-      pure $ innerDiv num denom
-
-innerDiv :: HasCallStack => Integer -> Integer -> Integer
-innerDiv num denom = num `div` denom
-
-throwingJSONFunToInfernoFun :: (NFData input, Aeson.FromJSON input, NFData output, Aeson.ToJSON output) => (HasCallStack => input -> IO output) -> InfernoFun
-throwingJSONFunToInfernoFun f1 = jsonFunToInfernoFun (wrapper f1)
-  where
-    wrapper :: (NFData input, Aeson.FromJSON input, NFData output, Aeson.ToJSON output, HasCallStack) => (HasCallStack => input -> IO output) -> (Either String input -> IO (Either Aeson.Value output))
-    wrapper fun = \inputEitherLazy -> do
-      inputEither <- evaluateDeep inputEitherLazy
-      case inputEither of
-        Left error ->
-          pure $ Left $ exceptionToJSON $ exceptionWithCallStack $ toException $ Aeson.AesonException error
-        Right input -> do
-          outputEither <- E.try (evaluateDeep =<< fun input)
-          pure $ Bifunctor.first exceptionToJSON outputEither
+throwingFunToJSONFun :: HasCallStack => (NFData input, Aeson.FromJSON input, NFData output, Aeson.ToJSON output, HasCallStack) => (input -> IO output) -> (Either String input -> IO (Either Aeson.Value output))
+throwingFunToJSONFun fun = \inputEitherLazy -> do
+  inputEither <- evaluateDeep inputEitherLazy
+  case inputEither of
+    Left err ->
+      pure $ Left $ exceptionToJSON $ exceptionWithCallStack $ toException $ Aeson.AesonException err
+    Right input -> do
+      outputEither <- E.try (evaluateDeep =<< fun input)
+      pure $ Bifunctor.first exceptionToJSON outputEither
 
 exceptionToJSON :: AnnotatedException SomeException -> Aeson.Value
 exceptionToJSON aex@(AnnotatedException anns exception) = 

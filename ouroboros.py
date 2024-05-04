@@ -129,7 +129,7 @@ class HaskellException(Exception):
     super().__init__(name, message)
 
 def haskellCallstackToPythonTraceback(callstack):
-  print(callstack)
+  # print(callstack)
   if callstack is None:
     return None
   import tblib
@@ -161,7 +161,7 @@ def haskellDiv(num, denom):
     return outObject['Right']
   elif 'Left' in outObject and 'name' in outObject['Left'] and 'message' in outObject['Left']:
     error = outObject['Left']
-    print(error)
+    # print(error)
     raiseHaskellExceptionToPythonException(error['name'], error['message'], error['callstack'], error['annotations'])
   else:
     raise Exception(f"JSON in unexpected format returned from Haskell FFI call: {outObject}")
