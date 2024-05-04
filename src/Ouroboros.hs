@@ -1,6 +1,7 @@
 {-# LANGUAGE ForeignFunctionInterface #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE GHC2021 #-}
+{-# LANGUAGE RecordWildCards #-}
 module Ouroboros where
 import qualified Data.Char as C
 import Foreign.C.Types
@@ -36,8 +37,12 @@ import ByteBox qualified
 import Data.Aeson qualified as Aeson
 import qualified Type.Reflection as Reflection
 import qualified Data.Bifunctor as Bifunctor
-import UnliftIO.Exception
+import Control.Exception.Annotated (AnnotatedException)
+import Control.Exception.Annotated.UnliftIO
+import UnliftIO.Exception (evaluateDeep, handle)
 import Control.DeepSeq (NFData)
+import GHC.Stack
+import qualified Data.Annotation as Annotation
 
 foreign export ccall example :: CString -> IO CString
 example :: CString -> IO CString 
@@ -111,9 +116,9 @@ nag = do
 
 printOnInterrupt exception | exception == E.UserInterrupt = do
   print "User interrupt was received!"
-  throwIO exception
+  throw exception
 printOnInterrupt exception = do
-  throwIO exception
+  throw exception
 
 foo :: (CInt -> CInt) -> (Int -> Int)
 foo fun = fromIntegral . fun . fromIntegral
@@ -149,7 +154,7 @@ runpython funPtr = handle exceptionToBool $ do
             if not succeeded then do
               putStrLn "Haskell: Python threw an error, rethrowing"
               -- print (FatPtr.toList outStr :: ByteString)
-              throwIO E.UserInterrupt
+              throw E.UserInterrupt
             else do
               putStrLn "Haskell: Python succeeded"
               pure outStr
@@ -209,29 +214,32 @@ foreign export ccall haskellDiv :: InfernoFun
 haskellDiv :: InfernoFun
 haskellDiv = throwingJSONFunToInfernoFun impl
   where
-    impl :: (Integer, Integer) -> IO Integer
-    impl (num, denom) = E.throw E.UserInterrupt -- pure $ num `div` denom
+    impl :: HasCallStack => (Integer, Integer) -> IO Integer
+    impl (num, denom) = throw E.UserInterrupt -- pure $ innerDiv num denom
 
-throwingJSONFunToInfernoFun :: (Aeson.FromJSON input, NFData output, Aeson.ToJSON output) => (input -> IO output) -> InfernoFun
-throwingJSONFunToInfernoFun fun =
-  jsonFunToInfernoFun $ \inputEither ->
-    case inputEither of
-      Left error ->
-        pure $ Left $ exceptionToJSON $ toException $ InputParseException error
-      Right input -> do
-        result <- E.try (evaluateDeep =<< fun input)
-        pure $ Bifunctor.first exceptionToJSON result
+innerDiv :: HasCallStack => Integer -> Integer -> Integer
+innerDiv num denom = num `div` denom
 
-newtype InputParseException = InputParseException String
-  deriving (Show)
+throwingJSONFunToInfernoFun :: (NFData input, Aeson.FromJSON input, NFData output, Aeson.ToJSON output) => (HasCallStack => input -> IO output) -> InfernoFun
+throwingJSONFunToInfernoFun f1 = jsonFunToInfernoFun (wrapper f1)
+  where
+    wrapper :: (NFData input, Aeson.FromJSON input, NFData output, Aeson.ToJSON output, HasCallStack) => (HasCallStack => input -> IO output) -> (Either String input -> IO (Either Aeson.Value output))
+    wrapper fun = \inputEitherLazy -> do
+      inputEither <- evaluateDeep inputEitherLazy
+      case inputEither of
+        Left error ->
+          pure $ Left $ exceptionToJSON $ exceptionWithCallStack $ toException $ Aeson.AesonException error
+        Right input -> do
+          outputEither <- E.try (evaluateDeep =<< fun input)
+          pure $ Bifunctor.first exceptionToJSON outputEither
 
-instance Exception InputParseException
-
-exceptionToJSON :: SomeException -> Aeson.Value
-exceptionToJSON exception = 
+exceptionToJSON :: AnnotatedException SomeException -> Aeson.Value
+exceptionToJSON aex@(AnnotatedException anns exception) = 
   Aeson.object 
     ["name" Aeson..= exceptionName exception
     ,"message" Aeson..= displayException exception
+    ,"callstack" Aeson..= (simplifiedCallStack . getCallStack <$> annotatedExceptionCallStack aex)
+    , "annotations" Aeson..= (fmap show $ nonCallstackAnnotations anns)
     ]
 
 exceptionName :: SomeException -> String
@@ -243,3 +251,34 @@ exceptionName e | Just (asyncEx :: E.AsyncException) <- fromException e =
     E.UserInterrupt -> "UserInterrupt"
 
 exceptionName (SomeException syncEx) = show $ Reflection.typeOf syncEx
+
+nonCallstackAnnotations :: [Annotation] -> [Annotation]
+nonCallstackAnnotations anns = 
+  let (_ :: [CallStack], other) = Annotation.tryAnnotations anns in other
+
+data SimpleSrcLoc = SimpleSrcLoc {file :: String, line :: Int, col :: Int}
+  deriving (Show)
+
+instance Aeson.ToJSON SimpleSrcLoc where
+  toJSON SimpleSrcLoc {..} = 
+    Aeson.object
+    [ "file" Aeson..= file
+    , "line" Aeson..= line
+    , "col" Aeson..= col
+    ]
+
+simplifiedCallStack :: [(String, SrcLoc)] -> [(String, SimpleSrcLoc)]
+simplifiedCallStack = fmap (\(name, loc) -> (name, simplifiedSrcLoc loc))
+simplifiedSrcLoc :: SrcLoc -> SimpleSrcLoc
+simplifiedSrcLoc SrcLoc{..} = 
+  -- We suffix the actual filename with the package/module name for two reasons
+  -- (1) so it is shown on the other side
+  -- (2) so the python traceback printer cannot find the original source file;
+  --     since we cannot pass column information (it tries parsing the haskell code as python code)
+  --     it would highlight completely the wrong columns which is detrimental to the readability of the stacktrace.
+  let prettyFile = srcLocFile <> " (" <> srcLocPackage <> ":" <> srcLocModule <> ")" in
+  SimpleSrcLoc
+    { file = prettyFile
+    , line = srcLocStartLine
+    , col = srcLocStartCol
+    }

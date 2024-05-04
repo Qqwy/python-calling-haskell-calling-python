@@ -42,7 +42,7 @@ foreign-library Ouroboros
   -- Only supported on Linux, not sure if we need this:
   -- lib-version-info:    6:3:2
 
-  build-depends:       base ^>=4.19.0.0, async, vector, unix, storable-tuple, bytestring, aeson, unliftio, deepseq
+  build-depends:       base ^>=4.19.0.0, async, vector, unix, storable-tuple, bytestring, aeson, unliftio, deepseq, annotated-exception
   hs-source-dirs:      src
   other-modules:       Ouroboros, SizePrefixedArray, FatPtr, ByteBox
   c-sources:           csrc/OuroborosWrapper.c

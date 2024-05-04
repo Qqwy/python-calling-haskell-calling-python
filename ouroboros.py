@@ -91,29 +91,52 @@ def printJSON(inObject):
   outObject = json.loads(outStr)
   return outObject
 
-def haskellExceptionToPythonException(name, message):
+def raiseHaskellExceptionToPythonException(name, message, callstack, annotations = []):
+  res = None
   # Async exceptions
   if name == "UserInterrupt":
-    return KeyboardInterrupt
+    res = KeyboardInterrupt
   if name == "StackOverflow":
-    return RecursionError(message)
+    res = RecursionError(message)
   if name == "HeapOverflow":
-    return MemoryError(message)
+    res = MemoryError(message)
   if name == "ThreadKilled": # NOTE: This is not 1:1 the same, but the closest
-    return SystemExit(message)
+    res = SystemExit(message)
   # Sync exceptions
   if name == "ArithException" and message == "divide by zero":
-    return ZeroDivisionError
+    res = ZeroDivisionError
   if name == "ArithException":
-    return ArithmeticError(message)
-  return HaskellException(name, message)
+    res = ArithmeticError(message)
+  # Haskell could not parse input passed to it:
+  if name == "AesonException":
+    res = ValueError(message)
+  
+  if res is None:
+    raise HaskellException(name, message, callstack, annotations)
+  else:
+    context = HaskellException(name, message, callstack, annotations)
+    raise res from context
   
 
 
 class HaskellException(Exception):
-  def __init__(self, name, message):
-    self.name = name
-    self.displayMessage = message
+  def __init__(self, name, message, callstack, annotations = []):
+    self.__traceback__ = haskellCallstackToPythonTraceback(callstack)
+    for annotation in annotations:
+      self.add_note(annotation)
+    super().__init__(name, message)
+
+def haskellCallstackToPythonTraceback(callstack):
+  import tblib
+  tb_next = None
+  for name, info in reversed(callstack):
+    code = {'co_filename': info['file'], 'co_name': name}
+    frame = {'f_lineno': info['line'], 'f_code': code, 'f_globals': {}}
+    current = {'tb_frame': frame, 'tb_lineno': info['line'], 'tb_next': tb_next}
+    tb_next = current
+    
+  return tblib.Traceback.from_dict(tb_next).as_traceback()
+
 
 _dll.haskellDiv.argtypes = [_ctypes.POINTER(ByteBox), _ctypes.POINTER(ByteBox)]
 _dll.haskellDiv.restype = None
@@ -130,9 +153,8 @@ def haskellDiv(num, denom):
   if 'Right' in outObject:
     return outObject['Right']
   elif 'Left' in outObject and 'name' in outObject['Left'] and 'message' in outObject['Left']:
-    name = outObject['Left']['name']
-    message = outObject['Left']['message']
-    raise haskellExceptionToPythonException(name, message)
+    error = outObject['Left']
+    raiseHaskellExceptionToPythonException(error['name'], error['message'], error['callstack'], error['annotations'])
   else:
     raise Exception(f"JSON in unexpected format returned from Haskell FFI call: {outObject}")
 
