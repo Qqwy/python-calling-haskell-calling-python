@@ -60,6 +60,9 @@ foreign export ccall haskellRealloc :: Ptr a -> Word -> IO (Ptr a)
 haskellRealloc ptr size = reallocBytes ptr (fromIntegral size)
 
 
+type InfernoFun = (ByteBox -> ByteBox -> IO ())
+foreign import ccall "dynamic" fromInfernoFun :: FunPtr InfernoFun -> InfernoFun
+
 bytestringFunToInfernoFun :: HasCallStack => (ByteString -> IO ByteString) -> InfernoFun
 bytestringFunToInfernoFun fun = (\inBox -> \outBox -> ByteBox.withBorrowingByteString inBox fun >>= ByteBox.pokeFromByteString outBox)
 
@@ -95,35 +98,6 @@ throwingJSONFunToInfernoFun fun = fun & throwingJSONFunToJSONFun & jsonFunToInfe
 
 -- Examples:
 
-foreign export ccall printJSON :: InfernoFun
-printJSON :: InfernoFun
-printJSON = jsonFunToInfernoFun fun
-  where
-    fun :: Either InputParseException Aeson.Value -> IO Aeson.Value
-    fun jsonValue =
-      case jsonValue of
-        Left err -> do
-          putStrLn $ "Error parsing JSON: " <> show err
-          pure Aeson.Null
-        Right (value :: Aeson.Value) -> do
-          putStr "Parsed JSON representation: "
-          print value
-          pure value
-
-type InfernoFun = (ByteBox -> ByteBox -> IO ())
-foreign import ccall "dynamic" fromInfernoFun :: FunPtr InfernoFun -> InfernoFun
-foreign export ccall runpython2 :: FunPtr InfernoFun -> IO ()
-runpython2 :: FunPtr InfernoFun -> IO ()
-runpython2 funPtr = do
-  let fun = ByteBox.inferno (fromInfernoFun funPtr)
-  let input = "Hello, world!"
-  output <- fun input
-  putStr "Haskell -- The output is: "
-  print output
-
-foreign export ccall appendMessage :: InfernoFun
-appendMessage :: InfernoFun
-appendMessage = bytestringFunToInfernoFun (\x -> pure $ x <> " Haskell is cooler!")
 
 foreign export ccall haskellDiv :: InfernoFun
 haskellDiv :: HasCallStack => InfernoFun
@@ -140,111 +114,3 @@ innerDiv num denom =
     throw E.UserInterrupt 
   else
     pure $ num `div` denom
-
--- Old:
-
-type ByteStr = (FatPtr Word8)
-type PurgatoryFun = (Ptr ByteStr -> Ptr ByteStr -> IO Bool)
-
-foreign import ccall "dynamic" purgatoryFunToHeavenFun :: FunPtr PurgatoryFun -> PurgatoryFun
-foreign export ccall runpython :: FunPtr PurgatoryFun -> IO Bool
-runpython :: FunPtr PurgatoryFun -> IO Bool
-runpython funPtr = handle exceptionToBool $ do
-  putStr "Haskell: Passing input "
-  let fun = funPtrToByteStrFun funPtr
-  let input = FatPtr.fromList ("{'a': 1}" :: ByteString)
-  output <- fun input
-  putStr "Haskell: Received output "
-  print (FatPtr.toList output :: ByteString)
-  pure True
-  where
-    exceptionToBool :: SomeException -> IO Bool
-    exceptionToBool _ = pure False
-
-
-funPtrToByteStrFun :: FunPtr PurgatoryFun -> ByteStr -> IO ByteStr
-funPtrToByteStrFun funPtr =
-  \inStr ->
-    alloca $ \inPtr ->
-      alloca $ \outPtr -> do
-        poke inPtr inStr
-        print inStr
-        succeeded <- (purgatoryFunToHeavenFun funPtr) inPtr outPtr
-        outStr <- peek outPtr
-        print outStr
-        if not succeeded then do
-          putStrLn "Haskell: Python threw an error, rethrowing"
-          -- print (FatPtr.toList outStr :: ByteString)
-          throw E.UserInterrupt
-        else do
-          putStrLn "Haskell: Python succeeded"
-          pure outStr
-
--- type SizePrefixedArray elem = (Word, Ptr elem)
-
--- | Model a sum type as an (error, value) product type, as it is easier to use it from Python that way.
--- If the bool is true, it contains an error and the second element might be garbage.
--- If the bool is false, `value` can be read.
-type ResultTuple a = (Bool, a)
-type IntToIntCallback = (CInt -> Ptr (ResultTuple CInt) -> IO ())
-
-foreign import ccall "dynamic" ptrToFun :: FunPtr IntToIntCallback -> IntToIntCallback
-foreign export ccall mappy :: Ptr (SizePrefixedArray CInt) -> FunPtr IntToIntCallback -> IO (Ptr (SizePrefixedArray CInt))
-mappy :: Ptr (SizePrefixedArray CInt) -> FunPtr IntToIntCallback -> IO (Ptr (SizePrefixedArray CInt))
-mappy inPtr funPtr = handle printOnInterrupt $ do
-  tid <- myThreadId
-  -- installHandler keyboardSignal (Catch (throwTo tid UserInterrupt)) Nothing
-
-  withAsync nag $ \nagger -> do
-    list <- SizePrefixedArray.fromRawPointerNofree @[CInt] inPtr
-    -- print inPtr
-    -- (len, inElemsPtr) <- peek inPtr
-    -- print len
-    -- -- print inElemsPtr
-    -- list <- peekArray (fromIntegral len) inElemsPtr
-    -- -- print list
-
-    let fun = ptrToFun funPtr
-    let fun' val = alloca $ \outputParam -> do
-              print outputParam
-              void $ fun val outputParam
-              (err, result) <- peek outputParam
-              if err then 
-                E.throw E.UserInterrupt 
-              else 
-                pure result
-    list' <- mapM fun' list
-    print list'
-
-    -- outPtr <- malloc
-    -- elemsPtr <- mallocArray (length list')
-    -- pokeArray elemsPtr list'
-    -- poke outPtr (fromIntegral $ length list', elemsPtr)
-    outPtr <- SizePrefixedArray.toRawPointer list'
-
-    cancel nagger
-    pure outPtr
-
-nag :: IO ()
-nag = do
-  putStrLn "Haskell is busy doing stuff in the background"
-  threadDelay 1000000
-  nag
-
-printOnInterrupt exception | exception == E.UserInterrupt = do
-  print "User interrupt was received!"
-  throw exception
-printOnInterrupt exception = do
-  throw exception
-
-
-
-foreign export ccall example :: CString -> IO CString
-example :: CString -> IO CString 
-example cstr = do
-  charlist <- peekCString cstr
-  let appended = charlist ++ " example!!"
-  promise <- async $ do
-    putStrLn $ "The result is: " <> appended
-  wait promise
-  newCString appended
