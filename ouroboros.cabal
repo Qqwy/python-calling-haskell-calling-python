@@ -22,7 +22,7 @@ maintainer:         qqwy@gmx.com
 extra-source-files: CHANGELOG.md
 
 library
-    exposed-modules:  SizePrefixedArray, FatPtr, ByteBox, SerializedExceptions
+    exposed-modules:  ByteBox, SerializedExceptions
 
     -- Modules included in this library but not exported.
     -- other-modules:
@@ -44,7 +44,7 @@ foreign-library Ouroboros
 
   build-depends:       base ^>=4.19.0.0, async, vector, unix, storable-tuple, bytestring, aeson, unliftio, deepseq, annotated-exception
   hs-source-dirs:      src
-  other-modules:       Ouroboros, SizePrefixedArray, FatPtr, ByteBox, SerializedExceptions
+  other-modules:       Ouroboros, ByteBox, SerializedExceptions
   c-sources:           csrc/OuroborosWrapper.c
   ghc-options: -Wall -threaded -O3
   default-language:    Haskell2010
