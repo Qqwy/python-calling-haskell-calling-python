@@ -50,6 +50,10 @@ toBorrowingByteString bb = do
   cstringlen <- peekIntoCStringLen bb
   ByteString.Unsafe.unsafePackCStringLen cstringlen
 
+withBorrowingByteString :: ByteBox -> (ByteString -> IO a) -> IO a
+withBorrowingByteString bb action = toBorrowingByteString bb >>= action
+
+
 -- O(1). The ByteString takes over ownership of the allocation behind the ByteBox
 -- (it will be freed when the ByteString is GC'd.)
 --

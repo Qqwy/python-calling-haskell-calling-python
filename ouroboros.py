@@ -3,10 +3,32 @@ import atexit as _atexit
 import signal
 import time
 import errno as _errno
+from typing import Any
 
 # Load the dynamic library. This will initialize the Haskell runtime system.
 _dll = _ctypes.CDLL("Ouroboros.dylib")
 
+_dll.haskellRealloc.argtypes = [_ctypes.c_void_p, _ctypes.c_uint]
+_dll.haskellRealloc.restype = _ctypes.c_void_p
+def haskellRealloc(ptr, size):
+  return _ctypes.cast(_dll.haskellRealloc(ptr, size), _ctypes.c_void_p)
+
+def haskellMalloc(size):
+  return haskellRealloc(None, size)
+
+def haskellFree(ptr):
+  haskellRealloc(ptr, 0)
+  return None
+
+def haskellMallocBytesCopy(string):
+  if isinstance(string, bytes):
+    bytestring = string
+  elif isinstance(string, str):
+    bytestring = string.encode()
+
+  ptr = _ctypes.cast(haskellMalloc(len(bytestring)), _ctypes.c_char_p)
+  _ctypes.memmove(ptr, bytestring, len(bytestring))
+  return ptr
 
 class ByteBox(_ctypes.Structure):
   _fields_ = [('elems', _ctypes.c_char_p), ("size", _ctypes.c_uint64)]
@@ -22,7 +44,7 @@ class ByteBox(_ctypes.Structure):
     else:
       raise Exception("Cannot convert input object {string} to str or bytes")
     haskellFree(self.elems)
-    self.elems = haskellMallocBytestring(bytestring)
+    self.elems = haskellMallocBytesCopy(bytestring)
     self.size = len(bytestring)
 
   def __len__(self):
@@ -34,6 +56,103 @@ class ByteBox(_ctypes.Structure):
     return self.elems[0:self.size]
   def __str__(self):
     return bytes(self).decode()
+
+class HaskellException(Exception):
+  def __init__(self, name, message, callstack, annotations = []):
+    traceback = haskellCallstackToPythonTraceback(callstack)
+    if traceback is not None:
+      self.__traceback__ = traceback
+    for annotation in annotations:
+      self.add_note(annotation)
+    super().__init__(name, message)
+
+def haskellCallstackToPythonTraceback(callstack):
+  # print(callstack)
+  if callstack is None:
+    return None
+  import tblib
+  tb_next = None
+  for name, info in callstack:
+    code = {'co_filename': info['file'], 'co_name': name}
+    frame = {'f_lineno': info['line'], 'f_code': code, 'f_globals': {}}
+    current = {'tb_frame': frame, 'tb_lineno': info['line'], 'tb_next': tb_next}
+    tb_next = current
+  if tb_next is not None:
+    return tblib.Traceback.from_dict(tb_next).as_traceback()
+  else:
+    return None
+
+def raiseHaskellExceptionAsPythonException(name, message, callstack, annotations = []):
+  res = None
+  # Async exceptions
+  if name == "UserInterrupt":
+    res = KeyboardInterrupt
+  if name == "StackOverflow":
+    res = RecursionError(message)
+  if name == "HeapOverflow":
+    res = MemoryError(message)
+  if name == "ThreadKilled": # NOTE: This is not 1:1 the same, but the closest
+    res = SystemExit(message)
+  # Sync exceptions
+  if name == "ArithException" and message == "divide by zero":
+    res = ZeroDivisionError
+  if name == "ArithException":
+    res = ArithmeticError(message)
+  # Haskell could not parse input passed to it:
+  if name == "InputParseException":
+    res = ValueError(message)
+  
+  if res is None:
+    raise HaskellException(name, message, callstack, annotations)
+  else:
+    context = HaskellException(name, message, callstack, annotations)
+    raise res from context
+
+def infernoFun(name):
+  lowerFun = getattr(_dll, name)
+  lowerFun.argtypes = [_ctypes.POINTER(ByteBox), _ctypes.POINTER(ByteBox)]
+  lowerFun.restype = None
+
+  def fun(inBytes: bytes) -> bytes:
+    inBox = ByteBox(inBytes)
+    outBox = ByteBox()
+    lowerFun(inBox, outBox)
+    outBytes = bytes(outBox)
+    return outBytes
+
+  return fun
+
+def jsonFun(name):
+  lowerFun = infernoFun(name)
+  def fun(*params: tuple) -> Any:
+    import json
+    inStr = json.dumps(params)
+    outStr = lowerFun(inStr)
+    outObj = json.loads(outStr)
+    return outObj
+  
+  return fun
+
+def throwingFun(name):
+  lowerFun = jsonFun(name)
+  def fun(*params: tuple) -> Any:
+    outObject = lowerFun(*params)
+    if 'Right' in outObject:
+      return outObject['Right']
+    elif 'Left' in outObject and 'name' in outObject['Left'] and 'message' in outObject['Left']:
+      error = outObject['Left']
+      raiseHaskellExceptionAsPythonException(error['name'], error['message'], error['callstack'], error['annotations'])
+    else:
+      raise Exception(f"JSON in unexpected format returned from Haskell FFI call: {outObject}")
+  
+  return fun
+    
+haskellDivImpl = throwingFun('haskellDiv')
+def haskellDiv(num: int, denom: int) -> int:
+  return haskellDivImpl(num, denom)
+
+
+# Old examples:
 
 def pythonFunToHaskellFun(fun):
   def wrapped_fun(in_ptr, out_ptr): 
@@ -91,111 +210,14 @@ def printJSON(inObject):
   outObject = json.loads(outStr)
   return outObject
 
-def raiseHaskellExceptionAsPythonException(name, message, callstack, annotations = []):
-  res = None
-  # Async exceptions
-  if name == "UserInterrupt":
-    res = KeyboardInterrupt
-  if name == "StackOverflow":
-    res = RecursionError(message)
-  if name == "HeapOverflow":
-    res = MemoryError(message)
-  if name == "ThreadKilled": # NOTE: This is not 1:1 the same, but the closest
-    res = SystemExit(message)
-  # Sync exceptions
-  if name == "ArithException" and message == "divide by zero":
-    res = ZeroDivisionError
-  if name == "ArithException":
-    res = ArithmeticError(message)
-  # Haskell could not parse input passed to it:
-  if name == "AesonException":
-    res = ValueError(message)
-  
-  if res is None:
-    raise HaskellException(name, message, callstack, annotations)
-  else:
-    context = HaskellException(name, message, callstack, annotations)
-    raise res from context
-  
 
-
-class HaskellException(Exception):
-  def __init__(self, name, message, callstack, annotations = []):
-    traceback = haskellCallstackToPythonTraceback(callstack)
-    if traceback is not None:
-      self.__traceback__ = traceback
-    for annotation in annotations:
-      self.add_note(annotation)
-    super().__init__(name, message)
-
-def haskellCallstackToPythonTraceback(callstack):
-  # print(callstack)
-  if callstack is None:
-    return None
-  import tblib
-  tb_next = None
-  for name, info in callstack:
-    code = {'co_filename': info['file'], 'co_name': name}
-    frame = {'f_lineno': info['line'], 'f_code': code, 'f_globals': {}}
-    current = {'tb_frame': frame, 'tb_lineno': info['line'], 'tb_next': tb_next}
-    tb_next = current
-  if tb_next is not None:
-    return tblib.Traceback.from_dict(tb_next).as_traceback()
-  else:
-    return None
-
-
-_dll.haskellDiv.argtypes = [_ctypes.POINTER(ByteBox), _ctypes.POINTER(ByteBox)]
-_dll.haskellDiv.restype = None
-def haskellDiv(num, denom):
-  import json
-  inStr = json.dumps([num, denom])
-  # print(inStr)
-  inBox = ByteBox(inStr)
-  # print(inBox)
-  outBox = ByteBox()
-  _dll.haskellDiv(inBox, outBox)
-  outStr = bytes(outBox)
-  outObject = json.loads(outStr)
-  if 'Right' in outObject:
-    return outObject['Right']
-  elif 'Left' in outObject and 'name' in outObject['Left'] and 'message' in outObject['Left']:
-    error = outObject['Left']
-    # print(error)
-    raiseHaskellExceptionAsPythonException(error['name'], error['message'], error['callstack'], error['annotations'])
-  else:
-    raise Exception(f"JSON in unexpected format returned from Haskell FFI call: {outObject}")
-
-
-# Register function signatures
-_dll.example.argtypes = [_ctypes.c_char_p]# 
+_dll.example.argtypes = [_ctypes.c_char_p]
 _dll.example.restype = _ctypes.c_char_p
 def example(string):
   input = string.encode()
   output = _dll.example(input)
   return output.decode()
 
-_dll.haskellRealloc.argtypes = [_ctypes.c_void_p, _ctypes.c_uint]
-_dll.haskellRealloc.restype = _ctypes.c_void_p
-def haskellRealloc(ptr, size):
-  return _ctypes.cast(_dll.haskellRealloc(ptr, size), _ctypes.c_void_p)
-
-def haskellMalloc(size):
-  return haskellRealloc(None, size)
-
-def haskellFree(ptr):
-  haskellRealloc(ptr, 0)
-  return None
-
-def haskellMallocBytestring(string):
-  if isinstance(string, bytes):
-    bytestring = string
-  elif isinstance(string, str):
-    bytestring = string.encode()
-
-  ptr = _ctypes.cast(haskellMalloc(len(bytestring)), _ctypes.c_char_p)
-  _ctypes.memmove(ptr, bytestring, len(bytestring))
-  return ptr
 
 def CleverVec(elemType, *elemVals):
   VLA = elemType * len(elemVals)
@@ -295,4 +317,3 @@ def mappy(elems, fun):
   except KeyboardInterrupt as e:
     print("KeyboardInterrupt received on the outside")
     raise e
-
