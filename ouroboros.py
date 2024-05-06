@@ -51,8 +51,12 @@ class ByteBox(_ctypes.Structure):
     return self.size
 
   def __getitem__(self, key):
+    if self.elems is None:
+      raise KeyError(key)
     return self.elems[0:self.size].__getitem__(key)
   def __bytes__(self):
+    if self.elems is None:
+      return b''
     return self.elems[0:self.size]
   def __str__(self):
     return bytes(self).decode()
@@ -146,7 +150,40 @@ def throwingFun(name):
       raise Exception(f"JSON in unexpected format returned from Haskell FFI call: {outObject}")
   
   return fun
-    
+
+# Examples:
+
 haskellDivImpl = throwingFun('haskellDiv')
 def haskellDiv(num: int, denom: int) -> int:
   return haskellDivImpl(num, denom)
+
+_InfernoCallback = _ctypes.CFUNCTYPE(None, _ctypes.POINTER(ByteBox), _ctypes.POINTER(ByteBox))
+
+def bytesCallbackToInfernoCallback(callback):
+  def wrapper(inBoxPtr, outBoxPtr):
+    inBytes = bytes(inBoxPtr.contents)
+    outBytes = callback(inBytes)
+    outBoxPtr.contents.fill_with(outBytes)
+  return _InfernoCallback(wrapper)
+
+def jsonCallbackToBytesCallback(callback):
+  def wrapper(inBytes):
+    import json
+    inObj = json.loads(inBytes)
+    outObj = callback(inObj)
+    outObj = {'Right': outObj}
+    outBytes = json.dumps(outObj)
+    return outBytes
+  return wrapper
+
+def jsonCallbackToInfernoCallback(callback):
+  return bytesCallbackToInfernoCallback(jsonCallbackToBytesCallback(callback))
+
+# TODO: throwing callback wrapper
+
+
+mappyImpl = throwingFun('mappy')
+def mappy(callback, elems):
+  callbackObj = jsonCallbackToInfernoCallback(callback)
+  callbackAddress = _ctypes.cast(callbackObj, _ctypes.c_void_p).value
+  return mappyImpl(callbackAddress, elems)
